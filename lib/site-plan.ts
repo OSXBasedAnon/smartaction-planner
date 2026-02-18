@@ -21,9 +21,23 @@ export function getSitePlan(category: Category): string[] {
 
 export function fallbackCategorize(items: QuoteItem[]): { category: Category; site_plan: string[] } {
   const text = items.map((item) => item.query.toLowerCase()).join(" ");
-  const match = KEYWORD_MAP.find((entry) => entry.terms.some((term) => text.includes(term)));
-  const category = match?.category ?? "unknown";
-  return { category, site_plan: getSitePlan(category) };
+  const scores = KEYWORD_MAP.map((entry) => ({
+    category: entry.category,
+    score: entry.terms.reduce((acc, term) => (text.includes(term) ? acc + 1 : acc), 0)
+  }));
+
+  const top = scores.sort((a, b) => b.score - a.score)[0];
+  if (!top || top.score === 0) {
+    return { category: "unknown", site_plan: getSitePlan("unknown") };
+  }
+
+  // Deterministic fallback: use the detected category, but blend unknown sites when confidence is weak.
+  if (top.score <= 1) {
+    const blended = [...getSitePlan(top.category), ...getSitePlan("unknown")];
+    return { category: top.category, site_plan: [...new Set(blended)].slice(0, 7) };
+  }
+
+  return { category: top.category, site_plan: getSitePlan(top.category) };
 }
 
 export function normalizeItems(items: Array<Partial<QuoteItem>>): QuoteItem[] {

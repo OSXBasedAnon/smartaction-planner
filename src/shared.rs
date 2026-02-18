@@ -67,6 +67,57 @@ pub struct QuoteResponse {
     pub items: Vec<ItemResult>,
 }
 
+fn extract_price_from_body(body: &str) -> Option<f64> {
+    let price_regex = Regex::new(r"\$\s?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)").ok()?;
+    let lower = body.to_lowercase();
+    let mut candidates: Vec<f64> = Vec::new();
+
+    for caps in price_regex.captures_iter(body).take(60) {
+        let Some(full_match) = caps.get(0) else {
+            continue;
+        };
+        let Some(raw_num) = caps.get(1).map(|m| m.as_str().replace(',', "")) else {
+            continue;
+        };
+        let Ok(price) = raw_num.parse::<f64>() else {
+            continue;
+        };
+        if !(1.0..=50000.0).contains(&price) {
+            continue;
+        }
+
+        let ctx_start = full_match.start().saturating_sub(24);
+        let ctx_end = (full_match.end() + 24).min(lower.len());
+        let context = &lower[ctx_start..ctx_end];
+        if context.contains("/mo")
+            || context.contains("month")
+            || context.contains("monthly")
+            || context.contains("financing")
+            || context.contains("per wk")
+            || context.contains("weekly")
+        {
+            continue;
+        }
+
+        if context.contains("shipping") && price < 20.0 {
+            continue;
+        }
+
+        candidates.push(price);
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = candidates[candidates.len() / 2];
+    candidates
+        .into_iter()
+        .find(|price| *price >= median * 0.35)
+        .or(Some(median))
+}
+
 fn build_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"));
@@ -306,11 +357,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64) -> SiteMatch {
                 .map(|node| node.text().collect::<Vec<_>>().join(" ").trim().to_string())
         });
 
-        let price_regex = Regex::new(r"\$\s?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)").ok();
-        let price = price_regex
-            .and_then(|regex| regex.captures(&body))
-            .and_then(|captures| captures.get(1).map(|m| m.as_str().replace(',', "")))
-            .and_then(|raw| raw.parse::<f64>().ok());
+        let price = extract_price_from_body(&body);
         (title, price)
     };
 

@@ -168,6 +168,72 @@ button:disabled {
   padding: 12px;
 }
 
+.result-card {
+  margin-bottom: 14px;
+}
+
+.vendor-list {
+  display: grid;
+  gap: 8px;
+}
+
+.vendor-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(17, 26, 40, 0.72);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.vendor-main {
+  min-width: 0;
+}
+
+.vendor-side {
+  display: grid;
+  justify-items: end;
+  align-content: center;
+  gap: 4px;
+}
+
+.vendor-price {
+  font-weight: 700;
+  font-size: 1.02rem;
+}
+
+.vendor-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 560px;
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.status-ok {
+  background: rgba(83, 210, 140, 0.17);
+  color: #8af0bc;
+}
+
+.status-blocked,
+.status-error,
+.status-unsupported_js {
+  background: rgba(255, 107, 107, 0.18);
+  color: #ff9898;
+}
+
+.status-not_found {
+  background: rgba(149, 162, 179, 0.2);
+  color: #c1cfde;
+}
+
 @media (max-width: 700px) {
   .home-wrap,
   .container {

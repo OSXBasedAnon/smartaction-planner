@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { DragEvent, useMemo, useState } from "react";
+import { DragEvent, useMemo, useRef, useState } from "react";
 import { QuoteResults } from "@/components/QuoteResults";
 import { RuntimeTimer } from "@/components/RuntimeTimer";
 import type { QuoteItemResult, SiteMatch } from "@/lib/types";
@@ -58,17 +58,18 @@ export default function LandingPage() {
   const [duration, setDuration] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const items = useMemo(() => parseCsvLike(rawInput), [rawInput]);
   const inputType = useMemo(() => inferInputType(items), [items]);
 
-  async function applyDroppedFile(file: File) {
+  async function applyFile(file: File) {
     const text = await file.text();
     const parsed = parseCsvLike(text);
     setRawInput(parsed.map((item) => `${item.query},${item.qty}`).join("\n"));
   }
 
-  async function onDrop(event: DragEvent<HTMLDivElement>) {
+  async function onDrop(event: DragEvent<HTMLFormElement>) {
     event.preventDefault();
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
@@ -76,7 +77,7 @@ export default function LandingPage() {
       setError("Please drop a CSV file.");
       return;
     }
-    await applyDroppedFile(file);
+    await applyFile(file);
   }
 
   async function runQuote() {
@@ -150,44 +151,53 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <section className="search-shell panel">
+      <section className="search-shell no-card">
         <div className="brand-row">
           <h1>SupplyFlare</h1>
           <img src="/logo.svg" alt="SupplyFlare logo" className="brand-logo" />
         </div>
 
-        <p className="small">Type anything, paste CSV lines, or drag/drop a CSV file.</p>
-
-        <div
-          className="drop-zone"
+        <form
+          className="search-line"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runQuote();
+          }}
           onDragOver={(event) => event.preventDefault()}
           onDrop={onDrop}
-          onClick={() => document.getElementById("csv-file")?.click()}
         >
-          <textarea
+          <input
             value={rawInput}
             onChange={(event) => setRawInput(event.target.value)}
-            placeholder="macbook pro 14 m3,1&#10;paper towels 2-ply,4&#10;SKU-ABC-123,2"
-            rows={6}
+            placeholder="Type anything or drop a CSV"
+            aria-label="Search input"
           />
+          <button
+            type="button"
+            className="attach-btn"
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach CSV"
+            aria-label="Attach CSV"
+          >
+            +CSV
+          </button>
           <input
-            id="csv-file"
+            ref={fileInputRef}
             type="file"
             accept=".csv,text/csv"
             style={{ display: "none" }}
             onChange={async (event) => {
               const file = event.target.files?.[0];
               if (!file) return;
-              await applyDroppedFile(file);
+              await applyFile(file);
             }}
           />
-          <span className="small">Drag CSV here or click to upload</span>
-        </div>
-
-        <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
-          <button type="button" onClick={runQuote} disabled={running || items.length === 0}>
+          <button type="submit" className="search-btn" disabled={running || items.length === 0}>
             Search
           </button>
+        </form>
+
+        <div className="row" style={{ justifyContent: "center", marginTop: 10 }}>
           <RuntimeTimer running={running} finishedDurationMs={duration} />
         </div>
 
@@ -196,7 +206,7 @@ export default function LandingPage() {
         {error ? <p className="error">{error}</p> : null}
       </section>
 
-      <section className="container panel" style={{ marginTop: 14 }}>
+      <section className="container results-flat" style={{ marginTop: 14 }}>
         <QuoteResults results={results} />
       </section>
     </main>

@@ -142,24 +142,46 @@ fn first_capture(body: &str, pattern: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
+fn unescape_url(raw: &str) -> String {
+    raw.replace("\\u0026", "&")
+        .replace("\\/", "/")
+        .replace("&amp;", "&")
+}
+
 fn extract_result_url(site: &str, body: &str) -> Option<String> {
     match site {
         "amazon" | "amazon_business" => {
             let path = first_capture(body, r#"href=\"(/(?:gp|dp|[^"]*?/dp/)[^"]+)\""#)?;
-            Some(format!("https://www.amazon.com{}", path.replace("\\u0026", "&")))
+            Some(format!("https://www.amazon.com{}", unescape_url(&path)))
         }
-        "newegg" => first_capture(body, r#"href=\"(https://www\.newegg\.com/p/[^\"]+)\""#),
+        "newegg" => {
+            first_capture(body, r#"href=\"(https://www\.newegg\.com/p/[^\"]+)\""#)
+                .or_else(|| first_capture(body, r#"href=\"(/p/[^\"]+)\""#).map(|path| format!("https://www.newegg.com{}", unescape_url(&path))))
+        }
         "bestbuy" => {
             let path = first_capture(body, r#"href=\"(/site/[^"]+\.p\?[^"]*)\""#)
                 .or_else(|| first_capture(body, r#"href=\"(/site/[^"]+\.p)\""#))?;
-            Some(format!("https://www.bestbuy.com{}", path.replace("\\u0026", "&")))
+            Some(format!("https://www.bestbuy.com{}", unescape_url(&path)))
         }
         "ebay" => {
             first_capture(body, r#"href=\"(https://www\.ebay\.com/itm/[^\"]+)\""#)
                 .or_else(|| first_capture(body, r#""itemWebUrl"\s*:\s*"(https://www\.ebay\.com/itm/[^"]+)""#))
                 .or_else(|| first_capture(body, r#"href="(https://www\.ebay\.com/itm/[^"]+)""#))
+                .map(|url| unescape_url(&url))
         }
         "target" => first_capture(body, r#"href=\"(https://www\.target\.com/p/[^\"]+)\""#),
+        "microcenter" => {
+            first_capture(body, r#"href=\"(/product/[0-9]+/[^\"]+)\""#)
+                .map(|path| format!("https://www.microcenter.com{}", unescape_url(&path)))
+        }
+        "officedepot" => {
+            first_capture(body, r#"href=\"(https://www\.officedepot\.com/a/products/[^\"]+)\""#)
+                .map(|url| unescape_url(&url))
+        }
+        "quill" => {
+            first_capture(body, r#"href=\"(https://www\.quill\.com/[^\"]+/cbs/[^\"]+)\""#)
+                .map(|url| unescape_url(&url))
+        }
         _ => None
     }
 }

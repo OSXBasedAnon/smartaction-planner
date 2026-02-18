@@ -117,6 +117,89 @@ async function resolveExpandedBasePlan(primaryCategory: string, categoryCandidat
   return sanitizeSitePlan(plans.flat().filter((site) => site.trim().length > 0));
 }
 
+function inferIntent(items: Array<{ query: string }>, category: string): "consumer" | "industrial" | "restaurant" | "office" | "unknown" {
+  const text = items.map((item) => item.query.toLowerCase()).join(" ");
+  if (category === "restaurant") return "restaurant";
+  if (category === "office") return "office";
+
+  const consumerHints = [
+    "macbook",
+    "laptop",
+    "keyboard",
+    "controller",
+    "playstation",
+    "xbox",
+    "speaker",
+    "monitor",
+    "headphone",
+    "phone",
+    "tablet",
+    "alienware",
+    "gpu",
+    "ssd",
+    "tv"
+  ];
+  const industrialHints = [
+    "conduit",
+    "breaker",
+    "electrical wire",
+    "awg",
+    "junction box",
+    "circuit",
+    "contact block",
+    "receptacle",
+    "nema"
+  ];
+
+  if (consumerHints.some((hint) => text.includes(hint))) return "consumer";
+  if (industrialHints.some((hint) => text.includes(hint))) return "industrial";
+
+  if (category === "electronics") return "consumer";
+  if (category === "electrical") return "industrial";
+  return "unknown";
+}
+
+function filterSitesByIntent(sitePlan: string[], intent: "consumer" | "industrial" | "restaurant" | "office" | "unknown"): string[] {
+  const industrialSites = new Set(["grainger", "zoro", "platt", "cityelectricsupply", "mcmaster", "lowes", "homedepot"]);
+  const restaurantSites = new Set(["webstaurantstore", "katom", "centralrestaurant", "therestaurantstore", "restaurantdepot", "ace_mart"]);
+  const officeSites = new Set(["staples", "officedepot", "quill", "uline"]);
+  const consumerSites = new Set([
+    "amazon",
+    "amazon_business",
+    "walmart",
+    "walmart_business",
+    "target",
+    "ebay",
+    "bestbuy",
+    "newegg",
+    "microcenter",
+    "bhphotovideo",
+    "adorama"
+  ]);
+
+  if (intent === "consumer") {
+    const filtered = sitePlan.filter((site) => consumerSites.has(site) || officeSites.has(site));
+    return filtered.length > 0 ? filtered : sitePlan;
+  }
+
+  if (intent === "industrial") {
+    const filtered = sitePlan.filter((site) => industrialSites.has(site) || consumerSites.has(site));
+    return filtered.length > 0 ? filtered : sitePlan;
+  }
+
+  if (intent === "restaurant") {
+    const filtered = sitePlan.filter((site) => restaurantSites.has(site) || consumerSites.has(site));
+    return filtered.length > 0 ? filtered : sitePlan;
+  }
+
+  if (intent === "office") {
+    const filtered = sitePlan.filter((site) => officeSites.has(site) || consumerSites.has(site));
+    return filtered.length > 0 ? filtered : sitePlan;
+  }
+
+  return sitePlan;
+}
+
 async function loadSiteCatalog(sitePlan: string[]): Promise<Map<string, SiteCatalogRow>> {
   if (!canPersist() || sitePlan.length === 0) return new Map();
 
@@ -258,7 +341,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No valid items in request" }, { status: 400 });
   }
 
-  const basePlan = await resolveExpandedBasePlan(parsed.category, parsed.category_candidates, parsed.site_plan);
+  const candidateCategories = parsed.confidence >= 0.72 ? [] : parsed.category_candidates;
+  const basePlanUnfiltered = await resolveExpandedBasePlan(parsed.category, candidateCategories, parsed.site_plan);
+  const intent = inferIntent(parsed.normalized_items, parsed.category);
+  const basePlan = filterSitesByIntent(basePlanUnfiltered, intent);
   const catalog = await loadSiteCatalog(basePlan);
   const scoredSites = scoreSites(basePlan, catalog).slice(0, 12);
   const rankedSites = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, scoredSites);

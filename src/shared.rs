@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -5,7 +6,6 @@ use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
-use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -30,6 +30,7 @@ pub struct QuoteRequest {
     pub items: Vec<QuoteItem>,
     pub category: String,
     pub site_plan: Vec<String>,
+    pub site_overrides: Option<HashMap<String, String>>,
     pub options: Option<QuoteOptions>,
 }
 
@@ -69,6 +70,77 @@ pub struct QuoteResponse {
 
 fn parse_price(raw: &str) -> Option<f64> {
     raw.replace(',', "").parse::<f64>().ok()
+}
+
+fn extract_title(body: &str) -> Option<String> {
+    let title_re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
+    let raw = title_re.captures(body)?.get(1)?.as_str();
+    let compact = raw
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.is_empty() {
+        None
+    } else {
+        Some(compact)
+    }
+}
+
+const USER_AGENTS: [&str; 5] = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:123.0) Gecko/20100101 Firefox/123.0"
+];
+
+fn pick_user_agent(site: &str, query: &str, attempt: usize) -> &'static str {
+    let mut seed: usize = attempt;
+    for byte in site.bytes().chain(query.bytes()) {
+        seed = seed.wrapping_mul(131).wrapping_add(byte as usize);
+    }
+    USER_AGENTS[seed % USER_AGENTS.len()]
+}
+
+fn likely_bot_challenge(lower_body: &str) -> bool {
+    lower_body.contains("enable javascript")
+        || lower_body.contains("captcha")
+        || lower_body.contains("are you a human")
+        || lower_body.contains("cloudflare")
+        || lower_body.contains("access denied")
+        || lower_body.contains("bot detection")
+}
+
+async fn read_body_limited(response: reqwest::Response, max_bytes: usize) -> Result<String, String> {
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let slice = if bytes.len() > max_bytes {
+        &bytes[..max_bytes]
+    } else {
+        &bytes
+    };
+    String::from_utf8(slice.to_vec()).map_err(|e| e.to_string())
+}
+
+fn extract_price_from_json_ld(body: &str) -> Option<f64> {
+    let price_re = Regex::new(r#""price"\s*:\s*"?(?P<p>[0-9]+(?:\.[0-9]{1,2})?)"?"#).ok()?;
+    let mut prices = Vec::new();
+    for caps in price_re.captures_iter(body).take(80) {
+        let Some(raw) = caps.name("p").map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(price) = parse_price(raw) else {
+            continue;
+        };
+        if (3.0..=50000.0).contains(&price) {
+            prices.push(price);
+        }
+    }
+    if prices.is_empty() {
+        return None;
+    }
+    prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(prices[prices.len() / 2])
 }
 
 fn extract_amazon_price(body: &str) -> Option<f64> {
@@ -115,6 +187,10 @@ fn extract_amazon_price(body: &str) -> Option<f64> {
 }
 
 fn extract_price_from_body(site: &str, body: &str) -> Option<f64> {
+    if let Some(json_ld_price) = extract_price_from_json_ld(body) {
+        return Some(json_ld_price);
+    }
+
     if matches!(site, "amazon" | "amazon_business") {
         if let Some(price) = extract_amazon_price(body) {
             return Some(price);
@@ -172,16 +248,28 @@ fn extract_price_from_body(site: &str, body: &str) -> Option<f64> {
     candidates.into_iter().find(|price| *price >= median * 0.35).or(Some(median))
 }
 
-fn build_headers() -> HeaderMap {
+fn build_headers_with_ua(user_agent: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"));
+    if let Ok(value) = HeaderValue::from_str(user_agent) {
+        headers.insert(USER_AGENT, value);
+    } else {
+        headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENTS[0]));
+    }
     headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
     headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+    headers.insert("sec-fetch-mode", HeaderValue::from_static("navigate"));
+    headers.insert("sec-fetch-site", HeaderValue::from_static("none"));
     headers
 }
 
-fn site_url(site: &str, query: &str) -> String {
+fn site_url(site: &str, query: &str, overrides: Option<&HashMap<String, String>>) -> String {
     let q = encode(query);
+    if let Some(map) = overrides {
+        if let Some(template) = map.get(site) {
+            return template.replace("{q}", &q);
+        }
+    }
     match site {
         "amazon" | "amazon_business" => format!("https://www.amazon.com/s?k={q}"),
         "bestbuy" => format!("https://www.bestbuy.com/site/searchpage.jsp?st={q}"),
@@ -191,16 +279,24 @@ fn site_url(site: &str, query: &str) -> String {
         "staples" => format!("https://www.staples.com/{q}/directory_{q}"),
         "officedepot" => format!("https://www.officedepot.com/a/search/?q={q}"),
         "quill" => format!("https://www.quill.com/search?keywords={q}"),
+        "uline" => format!("https://www.uline.com/BL_35/Search?keywords={q}"),
+        "target" => format!("https://www.target.com/s?searchTerm={q}"),
         "webstaurantstore" => format!("https://www.webstaurantstore.com/search/{q}.html"),
         "katom" => format!("https://www.katom.com/search.html?query={q}"),
         "centralrestaurant" => format!("https://www.centralrestaurant.com/search/{q}"),
         "therestaurantstore" => format!("https://www.therestaurantstore.com/search/{q}"),
         "restaurantdepot" => format!("https://www.restaurantdepot.com/catalogsearch/result/?q={q}"),
+        "ace_mart" => format!("https://www.acemart.com/search?q={q}"),
         "grainger" => format!("https://www.grainger.com/search?searchQuery={q}"),
         "zoro" => format!("https://www.zoro.com/search?q={q}"),
         "homedepot" => format!("https://www.homedepot.com/s/{q}"),
         "platt" => format!("https://www.platt.com/search.aspx?q={q}"),
         "cityelectricsupply" => format!("https://www.cityelectricsupply.com/search?text={q}"),
+        "lowes" => format!("https://www.lowes.com/search?searchTerm={q}"),
+        "mcmaster" => format!("https://www.mcmaster.com/products/{q}/"),
+        "adorama" => format!("https://www.adorama.com/l/?searchinfo={q}"),
+        "microcenter" => format!("https://www.microcenter.com/search/search_results.aspx?Ntt={q}"),
+        "ebay" => format!("https://www.ebay.com/sch/i.html?_nkw={q}"),
         _ => format!("https://www.google.com/search?q={q}+buy")
     }
 }
@@ -302,7 +398,7 @@ pub async fn upsert_cache(site: &str, query: &str, payload: &SiteMatch) {
         .await;
 }
 
-pub async fn scrape_site(site: &str, query: &str, ttl: u64) -> SiteMatch {
+pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&HashMap<String, String>>) -> SiteMatch {
     let start = Instant::now();
 
     if let Some(cached) = maybe_get_cache(site, query, ttl).await {
@@ -313,53 +409,99 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64) -> SiteMatch {
         };
     }
 
-    let url = site_url(site, query);
-    let client = match reqwest::Client::builder().default_headers(build_headers()).build() {
-        Ok(c) => c,
-        Err(error) => {
-            return SiteMatch {
-                site: site.to_string(),
-                title: None,
-                price: None,
-                currency: Some("USD".to_string()),
-                url: Some(url),
-                status: "error".to_string(),
-                message: Some(format!("client_init_failed: {error}")),
-                latency_ms: Some(start.elapsed().as_millis())
-            }
-        }
-    };
+    let url = site_url(site, query, overrides);
+    let mut last_message = None::<String>;
+    let mut final_body = None::<String>;
+    let mut final_status = None::<u16>;
 
-    let request_result = timeout(Duration::from_secs(7), client.get(&url).send()).await;
-    let response = match request_result {
-        Ok(Ok(res)) => res,
-        Ok(Err(error)) => {
-            return SiteMatch {
-                site: site.to_string(),
-                title: None,
-                price: None,
-                currency: Some("USD".to_string()),
-                url: Some(url),
-                status: "error".to_string(),
-                message: Some(error.to_string()),
-                latency_ms: Some(start.elapsed().as_millis())
+    for attempt in 0..2usize {
+        let ua = pick_user_agent(site, query, attempt);
+        let client = match reqwest::Client::builder().default_headers(build_headers_with_ua(ua)).build() {
+            Ok(c) => c,
+            Err(error) => {
+                return SiteMatch {
+                    site: site.to_string(),
+                    title: None,
+                    price: None,
+                    currency: Some("USD".to_string()),
+                    url: Some(url),
+                    status: "error".to_string(),
+                    message: Some(format!("client_init_failed: {error}")),
+                    latency_ms: Some(start.elapsed().as_millis())
+                }
             }
-        }
-        Err(_) => {
-            return SiteMatch {
-                site: site.to_string(),
-                title: None,
-                price: None,
-                currency: Some("USD".to_string()),
-                url: Some(url),
-                status: "error".to_string(),
-                message: Some("timeout".to_string()),
-                latency_ms: Some(start.elapsed().as_millis())
-            }
-        }
-    };
+        };
 
-    if response.status().as_u16() == 403 || response.status().as_u16() == 429 {
+        let timeout_secs = if attempt == 0 { 5 } else { 3 };
+        let request_result = timeout(Duration::from_secs(timeout_secs), client.get(&url).send()).await;
+        let response = match request_result {
+            Ok(Ok(res)) => res,
+            Ok(Err(error)) => {
+                last_message = Some(error.to_string());
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+                break;
+            }
+            Err(_) => {
+                last_message = Some("timeout".to_string());
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+                break;
+            }
+        };
+
+        let status = response.status().as_u16();
+        final_status = Some(status);
+        if status == 403 || status == 429 || status == 503 {
+            last_message = Some(format!("http_status_{status}"));
+            if attempt == 0 {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                continue;
+            }
+            break;
+        }
+
+        let body = match read_body_limited(response, 512 * 1024).await {
+            Ok(text) => text,
+            Err(error) => {
+                last_message = Some(error);
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+                break;
+            }
+        };
+
+        if likely_bot_challenge(&body.to_lowercase()) {
+            last_message = Some("challenge_detected".to_string());
+            if attempt == 0 {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                continue;
+            }
+            return SiteMatch {
+                site: site.to_string(),
+                title: None,
+                price: None,
+                currency: Some("USD".to_string()),
+                url: Some(url),
+                status: "unsupported_js".to_string(),
+                message: Some("site requires browser execution or anti-bot challenge".to_string()),
+                latency_ms: Some(start.elapsed().as_millis())
+            };
+        }
+
+        final_body = Some(body);
+        break;
+    }
+
+    let body = if let Some(body) = final_body {
+        body
+    } else if matches!(final_status, Some(403 | 429 | 503)) || matches!(last_message.as_deref(), Some("challenge_detected")) {
         return SiteMatch {
             site: site.to_string(),
             title: None,
@@ -367,53 +509,24 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64) -> SiteMatch {
             currency: Some("USD".to_string()),
             url: Some(url),
             status: "blocked".to_string(),
-            message: Some(format!("http_status_{}", response.status().as_u16())),
+            message: last_message.or_else(|| final_status.map(|s| format!("http_status_{s}"))),
             latency_ms: Some(start.elapsed().as_millis())
         };
-    }
-
-    let body = match response.text().await {
-        Ok(text) => text,
-        Err(error) => {
-            return SiteMatch {
-                site: site.to_string(),
-                title: None,
-                price: None,
-                currency: Some("USD".to_string()),
-                url: Some(url),
-                status: "error".to_string(),
-                message: Some(error.to_string()),
-                latency_ms: Some(start.elapsed().as_millis())
-            }
-        }
-    };
-
-    let lower = body.to_lowercase();
-    if lower.contains("enable javascript") || lower.contains("captcha") {
+    } else {
         return SiteMatch {
             site: site.to_string(),
             title: None,
             price: None,
             currency: Some("USD".to_string()),
             url: Some(url),
-            status: "unsupported_js".to_string(),
-            message: Some("site requires browser execution or anti-bot challenge".to_string()),
+            status: "error".to_string(),
+            message: last_message.or(Some("request_failed".to_string())),
             latency_ms: Some(start.elapsed().as_millis())
         };
-    }
-
-    let (title, price) = {
-        let html = Html::parse_document(&body);
-        let title_selector = Selector::parse("title").ok();
-        let title = title_selector.and_then(|sel| {
-            html.select(&sel)
-                .next()
-                .map(|node| node.text().collect::<Vec<_>>().join(" ").trim().to_string())
-        });
-
-        let price = extract_price_from_body(site, &body);
-        (title, price)
     };
+
+    let title = extract_title(&body);
+    let price = extract_price_from_body(site, &body);
 
     let status = if price.is_some() { "ok" } else { "not_found" }.to_string();
 
@@ -436,7 +549,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64) -> SiteMatch {
 }
 
 pub fn best_from_matches(matches: &[SiteMatch]) -> Option<BestMatch> {
-    matches
+    let valid: Vec<(String, f64, String)> = matches
         .iter()
         .filter_map(|entry| {
             if entry.status == "ok" {
@@ -445,6 +558,30 @@ pub fn best_from_matches(matches: &[SiteMatch]) -> Option<BestMatch> {
                 None
             }
         })
+        .collect();
+
+    if valid.is_empty() {
+        return None;
+    }
+
+    let mut prices: Vec<f64> = valid.iter().map(|(_, p, _)| *p).collect();
+    prices.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let filtered: Vec<(String, f64, String)> = if prices.len() >= 3 {
+        let median = prices[prices.len() / 2];
+        let floor = median * 0.4;
+        let kept: Vec<(String, f64, String)> = valid
+            .iter()
+            .filter(|(_, price, _)| *price >= floor)
+            .cloned()
+            .collect();
+        if kept.is_empty() { valid.clone() } else { kept }
+    } else {
+        valid
+    };
+
+    filtered
+        .into_iter()
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(site, price, url)| BestMatch { site, price, url })
 }
@@ -452,6 +589,7 @@ pub fn best_from_matches(matches: &[SiteMatch]) -> Option<BestMatch> {
 pub async fn run_quote_collect(request: &QuoteRequest) -> Result<Vec<ItemResult>> {
     let ttl = ttl_seconds(request);
     let semaphore = Arc::new(Semaphore::new(20));
+    let overrides = request.site_overrides.clone();
 
     let mut item_results = Vec::with_capacity(request.items.len());
 
@@ -459,9 +597,23 @@ pub async fn run_quote_collect(request: &QuoteRequest) -> Result<Vec<ItemResult>
         let tasks = request.site_plan.iter().cloned().map(|site| {
             let sem = semaphore.clone();
             let query = item.query.clone();
+            let overrides = overrides.clone();
             async move {
-                let _permit = sem.acquire_owned().await.expect("semaphore closed");
-                let result = scrape_site(&site, &query, ttl).await;
+                let permit = sem.acquire_owned().await;
+                let Ok(_permit) = permit else {
+                    let fallback = SiteMatch {
+                        site: site.clone(),
+                        title: None,
+                        price: None,
+                        currency: Some("USD".to_string()),
+                        url: Some(site_url(&site, &query, overrides.as_ref())),
+                        status: "error".to_string(),
+                        message: Some("semaphore_closed".to_string()),
+                        latency_ms: Some(0)
+                    };
+                    return (site, fallback);
+                };
+                let result = scrape_site(&site, &query, ttl, overrides.as_ref()).await;
                 (site, result)
             }
         });

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { DragEvent, useMemo, useRef, useState } from "react";
+import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { QuoteResults } from "@/components/QuoteResults";
 import { RuntimeTimer } from "@/components/RuntimeTimer";
 import type { QuoteItemResult, SiteMatch } from "@/lib/types";
@@ -12,6 +12,27 @@ type StreamEvent =
   | { type: "item_done"; item_index: number; query: string; best?: { site: string; price: number; url: string } }
   | { type: "done"; duration_ms: number }
   | { type: "error"; message: string };
+
+type HistoryRun = {
+  id: string;
+  raw_input: string;
+  created_at: string;
+  status: string;
+  duration_ms: number | null;
+};
+
+function rawInputFromRun(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as Array<{ query?: string; qty?: number }>;
+    if (!Array.isArray(parsed)) return raw;
+    const lines = parsed
+      .map((item) => `${(item.query ?? "").trim()},${Number.isFinite(item.qty) && (item.qty ?? 0) > 0 ? item.qty : 1}`)
+      .filter((line) => !line.startsWith(","));
+    return lines.length > 0 ? lines.join("\n") : raw;
+  } catch {
+    return raw;
+  }
+}
 
 function mergeMatch(results: QuoteItemResult[], itemIndex: number, query: string, match: SiteMatch): QuoteItemResult[] {
   const next = [...results];
@@ -58,10 +79,32 @@ export default function LandingPage() {
   const [duration, setDuration] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const items = useMemo(() => parseCsvLike(rawInput), [rawInput]);
   const inputType = useMemo(() => inferInputType(items), [items]);
+
+  useEffect(() => {
+    void (async () => {
+      const response = await fetch("/api/me-history", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as { logged_in: boolean; runs: HistoryRun[] };
+      setLoggedIn(data.logged_in);
+      setHistoryRuns(data.runs ?? []);
+    })();
+  }, []);
+
+  async function removeRun(runIdToDelete: string) {
+    const response = await fetch("/api/me-history", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runIdToDelete })
+    });
+    if (!response.ok) return;
+    setHistoryRuns((prev) => prev.filter((run) => run.id !== runIdToDelete));
+  }
 
   async function applyFile(file: File) {
     const text = await file.text();
@@ -147,9 +190,30 @@ export default function LandingPage() {
     <main className="home-wrap">
       <header className="home-nav">
         <div className="row" style={{ gap: 10 }}>
-          <Link href="/app">Dashboard</Link>
-          <Link href="/login">Login</Link>
-          <Link href="/signup">Sign up</Link>
+          {loggedIn ? (
+            <details className="history-menu">
+              <summary>History</summary>
+              <div className="history-dropdown">
+                {historyRuns.length === 0 ? <p className="small">No runs yet</p> : null}
+                {historyRuns.map((run) => (
+                  <div key={run.id} className="history-item">
+                    <button type="button" className="history-fill" onClick={() => setRawInput(rawInputFromRun(run.raw_input))} title="Load into search">
+                      <span>{run.raw_input.slice(0, 42)}</span>
+                      <span className="small">{run.status}</span>
+                    </button>
+                    <button type="button" className="history-delete" onClick={() => void removeRun(run.id)} aria-label="Delete run">
+                      X
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : (
+            <>
+              <Link href="/login">Login</Link>
+              <Link href="/signup">Sign up</Link>
+            </>
+          )}
         </div>
       </header>
 

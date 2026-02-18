@@ -51,6 +51,61 @@ a {
   margin-bottom: 14px;
 }
 
+.history-menu {
+  position: relative;
+}
+
+.history-menu summary {
+  list-style: none;
+  cursor: pointer;
+  color: #c7d5e6;
+}
+
+.history-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.history-dropdown {
+  position: absolute;
+  right: 0;
+  top: 26px;
+  width: 360px;
+  max-height: 300px;
+  overflow: auto;
+  background: rgba(17, 26, 40, 0.95);
+  border: 1px solid #31415a;
+  border-radius: 10px;
+  padding: 8px;
+  z-index: 50;
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.history-fill {
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d5deea;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: left;
+  display: grid;
+  gap: 3px;
+}
+
+.history-delete {
+  border: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 107, 107, 0.22);
+  color: #ffd4d4;
+}
+
 .brand-row {
   display: flex;
   align-items: center;
@@ -155,6 +210,14 @@ button:disabled {
   color: var(--ok);
 }
 
+.best-link {
+  color: inherit;
+}
+
+.best-link:hover {
+  text-decoration: underline;
+}
+
 .disclaimer {
   color: var(--muted);
   margin-top: 10px;
@@ -167,6 +230,42 @@ button:disabled {
   gap: 10px;
   opacity: 0.8;
   padding-top: 0;
+}
+
+.auth-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.auth-card {
+  width: min(440px, 100%);
+  background: rgba(17, 26, 40, 0.86);
+  border: 1px solid #32445d;
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.auth-card h1 {
+  margin: 0 0 6px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.auth-form label {
+  font-size: 0.9rem;
+  color: #aebbc9;
+}
+
+.auth-password {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
 }
 
 .results-flat .panel {
@@ -261,6 +360,11 @@ button:disabled {
   .search-btn,
   .attach-btn {
     width: 100%;
+  }
+
+  .history-dropdown {
+    width: 92vw;
+    right: -8px;
   }
 
   .meta-strip {

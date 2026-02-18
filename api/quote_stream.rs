@@ -68,6 +68,7 @@ async fn handler(request: Request) -> Result<Response<ResponseBody>, Error> {
         });
 
     let semaphore = Arc::new(Semaphore::new(20));
+    let overrides = payload.site_overrides.clone();
     let (tx, rx) = mpsc::channel::<Result<Frame<Bytes>, Error>>(64);
 
     tokio::spawn(async move {
@@ -84,9 +85,23 @@ async fn handler(request: Request) -> Result<Response<ResponseBody>, Error> {
             let tasks = payload.site_plan.iter().cloned().map(|site| {
                 let sem = semaphore.clone();
                 let query_clone = query.clone();
+                let overrides = overrides.clone();
+                let site_clone = site.clone();
                 async move {
-                    let _permit = sem.acquire_owned().await.expect("semaphore closed");
-                    scrape_site(&site, &query_clone, ttl).await
+                    let permit = sem.acquire_owned().await;
+                    let Ok(_permit) = permit else {
+                        return shared::SiteMatch {
+                            site: site_clone.clone(),
+                            title: None,
+                            price: None,
+                            currency: Some("USD".to_string()),
+                            url: None,
+                            status: "error".to_string(),
+                            message: Some("semaphore_closed".to_string()),
+                            latency_ms: Some(0)
+                        };
+                    };
+                    scrape_site(&site, &query_clone, ttl, overrides.as_ref()).await
                 }
             });
 

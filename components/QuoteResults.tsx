@@ -1,10 +1,24 @@
 "use client";
 
 import type { QuoteItemResult } from "@/lib/types";
+import { getVendorSearchUrl } from "@/lib/vendor-links";
 
 type QuoteResultsProps = {
   results: QuoteItemResult[];
 };
+
+function isListingUrl(url?: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes("/search") ||
+    lower.includes("search?") ||
+    lower.includes("/s?") ||
+    lower.includes("/catalogsearch/") ||
+    lower.includes("/sch/i.html") ||
+    lower.includes("/p/pl?d=")
+  );
+}
 
 export function QuoteResults({ results }: QuoteResultsProps) {
   if (results.length === 0) {
@@ -25,7 +39,10 @@ export function QuoteResults({ results }: QuoteResultsProps) {
           <h3>{item.query}</h3>
           {item.best ? (
             <p className="ok">
-              Best: {item.best.site} ${item.best.price.toFixed(2)}
+              Best:{" "}
+              <a className="best-link" href={item.best.url} target="_blank" rel="noreferrer">
+                {item.best.site} {isListingUrl(item.best.url) ? `From $${item.best.price.toFixed(2)}` : `$${item.best.price.toFixed(2)}`}
+              </a>
             </p>
           ) : (
             <p className="small">No best price yet.</p>
@@ -44,12 +61,19 @@ export function QuoteResults({ results }: QuoteResultsProps) {
                   {typeof match.latency_ms === "number" ? <div className="small">{match.latency_ms}ms</div> : null}
                 </div>
                 <div className="vendor-side">
-                  {typeof match.price === "number" ? <div className="vendor-price">${match.price.toFixed(2)}</div> : <div className="small">n/a</div>}
-                  {match.url ? (
+                  {typeof match.price === "number" ? (
+                    <div className="vendor-price">{isListingUrl(match.url) ? `From $${match.price.toFixed(2)}` : `$${match.price.toFixed(2)}`}</div>
+                  ) : (
+                    <div className="small">n/a</div>
+                  )}
+                  {match.url && match.status === "ok" ? (
                     <a href={match.url} target="_blank" rel="noreferrer">
                       Open result
                     </a>
                   ) : null}
+                  <a href={getVendorSearchUrl(match.site, item.query)} target="_blank" rel="noreferrer">
+                    Open listing
+                  </a>
                 </div>
               </article>
             ))}

@@ -9,6 +9,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -20,22 +21,40 @@ export default function LoginPage() {
       setError(authError.message);
       return;
     }
-    router.push("/app");
+    router.push("/");
     router.refresh();
   }
 
   return (
-    <main className="container grid" style={{ maxWidth: 460 }}>
-      <h1>Login</h1>
-      <form onSubmit={onSubmit} className="panel grid">
-        <input type="email" placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <input type="password" placeholder="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        <button type="submit">Sign in</button>
-        {error ? <p className="error">{error}</p> : null}
-      </form>
-      <p className="small">
-        Need account? <Link href="/signup">Create one</Link>
-      </p>
+    <main className="auth-wrap">
+      <section className="auth-card">
+        <h1>Welcome back</h1>
+        <p className="small">Sign in to access saved history and manage quote runs.</p>
+        <form onSubmit={onSubmit} className="auth-form">
+          <label>Email</label>
+          <input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <label>Password</label>
+          <div className="auth-password">
+            <input
+              type={show ? "text" : "password"}
+              placeholder="Your password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+            <button type="button" className="attach-btn" onClick={() => setShow((v) => !v)}>
+              {show ? "Hide" : "Show"}
+            </button>
+          </div>
+          <button type="submit" className="search-btn">
+            Log in
+          </button>
+          {error ? <p className="error">{error}</p> : null}
+        </form>
+        <p className="small">
+          Need account? <Link href="/signup">Create one</Link>
+        </p>
+      </section>
     </main>
   );
 }

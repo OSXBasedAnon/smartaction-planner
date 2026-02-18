@@ -26,5 +26,5 @@ export function RuntimeTimer({ running, finishedDurationMs }: RuntimeTimerProps)
     return <p className="small">Final duration: {(finishedDurationMs / 1000).toFixed(2)}s</p>;
   }
 
-  return <p className="small">Idle</p>;
+  return null;
 }

@@ -41,6 +41,50 @@ function canPersist() {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
 }
 
+async function resolveSitePlanFromSupabase(category: string, fallback: string[]): Promise<string[]> {
+  if (!canPersist()) return fallback;
+
+  try {
+    const service = createSupabaseServiceClient();
+    const { data, error } = await service
+      .from("site_plans")
+      .select("sites")
+      .eq("category", category)
+      .maybeSingle();
+
+    if (error || !data?.sites || !Array.isArray(data.sites)) return fallback;
+    const sites = data.sites.filter((s: unknown): s is string => typeof s === "string" && s.trim().length > 0);
+    return sites.length > 0 ? sites : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function resolveSiteOverridesFromSupabase(sitePlan: string[]): Promise<Record<string, string>> {
+  if (!canPersist() || sitePlan.length === 0) return {};
+
+  try {
+    const service = createSupabaseServiceClient();
+    const { data, error } = await service
+      .from("site_catalog")
+      .select("site, search_url_template")
+      .in("site", sitePlan)
+      .eq("enabled", true);
+
+    if (error || !data) return {};
+
+    const overrides: Record<string, string> = {};
+    for (const row of data) {
+      if (typeof row.site === "string" && typeof row.search_url_template === "string" && row.search_url_template.includes("{q}")) {
+        overrides[row.site] = row.search_url_template;
+      }
+    }
+    return overrides;
+  } catch {
+    return {};
+  }
+}
+
 export async function POST(request: Request) {
   const rawBody = await request.json();
   const parsedInput = inputSchema.safeParse(rawBody);
@@ -51,6 +95,8 @@ export async function POST(request: Request) {
 
   const runId = randomUUID();
   const normalized = await parseAndRoute(parsedInput.data.items);
+  const resolvedSitePlan = await resolveSitePlanFromSupabase(normalized.category, normalized.site_plan);
+  const siteOverrides = await resolveSiteOverridesFromSupabase(resolvedSitePlan);
 
   if (normalized.normalized_items.length === 0) {
     return NextResponse.json({ error: "No valid items in request" }, { status: 400 });
@@ -77,7 +123,7 @@ export async function POST(request: Request) {
       input_type: parsedInput.data.input_type,
       raw_input: JSON.stringify(parsedInput.data.items),
       category: normalized.category,
-      site_plan: normalized.site_plan,
+      site_plan: resolvedSitePlan,
       status: "running"
     });
   }
@@ -87,7 +133,8 @@ export async function POST(request: Request) {
     run_id: runId,
     items: normalized.normalized_items,
     category: normalized.category,
-    site_plan: normalized.site_plan,
+    site_plan: resolvedSitePlan,
+    site_overrides: siteOverrides,
     options: {
       cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0")
     }

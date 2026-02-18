@@ -1,22 +1,22 @@
 [
   {
     "category": "office",
-    "sites": ["staples", "officedepot", "quill", "amazon_business", "walmart_business"]
+    "sites": ["staples", "officedepot", "quill", "amazon_business", "walmart_business", "uline", "target"]
   },
   {
     "category": "electronics",
-    "sites": ["amazon", "bestbuy", "newegg", "bhphotovideo", "walmart"]
+    "sites": ["amazon", "bestbuy", "newegg", "bhphotovideo", "walmart", "adorama", "microcenter", "ebay"]
   },
   {
     "category": "restaurant",
-    "sites": ["webstaurantstore", "katom", "centralrestaurant", "therestaurantstore", "restaurantdepot"]
+    "sites": ["webstaurantstore", "katom", "centralrestaurant", "therestaurantstore", "restaurantdepot", "ace_mart"]
   },
   {
     "category": "electrical",
-    "sites": ["grainger", "zoro", "homedepot", "platt", "cityelectricsupply"]
+    "sites": ["grainger", "zoro", "homedepot", "platt", "cityelectricsupply", "lowes", "mcmaster"]
   },
   {
     "category": "unknown",
-    "sites": ["amazon", "walmart", "bestbuy"]
+    "sites": ["amazon", "walmart", "bestbuy", "target", "ebay", "newegg"]
   }
 ]

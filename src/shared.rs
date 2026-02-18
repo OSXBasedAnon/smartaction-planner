@@ -142,7 +142,11 @@ fn extract_result_url(site: &str, body: &str) -> Option<String> {
                 .or_else(|| first_capture(body, r#"href=\"(/site/[^"]+\.p)\""#))?;
             Some(format!("https://www.bestbuy.com{}", path.replace("\\u0026", "&")))
         }
-        "ebay" => first_capture(body, r#"href=\"(https://www\.ebay\.com/itm/[^\"]+)\""#),
+        "ebay" => {
+            first_capture(body, r#"href=\"(https://www\.ebay\.com/itm/[^\"]+)\""#)
+                .or_else(|| first_capture(body, r#""itemWebUrl"\s*:\s*"(https://www\.ebay\.com/itm/[^"]+)""#))
+                .or_else(|| first_capture(body, r#"href="(https://www\.ebay\.com/itm/[^"]+)""#))
+        }
         "target" => first_capture(body, r#"href=\"(https://www\.target\.com/p/[^\"]+)\""#),
         _ => None
     }
@@ -552,6 +556,22 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
     };
 
     let title = extract_title(&body);
+    if title
+        .as_deref()
+        .map(|t| t.to_lowercase().contains("pardon our interruption"))
+        .unwrap_or(false)
+    {
+        return SiteMatch {
+            site: site.to_string(),
+            title,
+            price: None,
+            currency: Some("USD".to_string()),
+            url: Some(url),
+            status: "blocked".to_string(),
+            message: Some("anti_bot_interruption_page".to_string()),
+            latency_ms: Some(start.elapsed().as_millis())
+        };
+    }
     let price = extract_price_from_body(site, &body);
     let result_url = extract_result_url(site, &body);
 

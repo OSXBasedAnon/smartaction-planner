@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { fallbackCategorize, getSitePlan, normalizeItems } from "@/lib/site-plan";
+import sitePlansJson from "@/config/site-plans.json";
 import type { Category, QuoteItem } from "@/lib/types";
 
 const aiResponseSchema = z.object({
@@ -26,6 +27,25 @@ export type ParsedPlan = {
   source: "ai" | "fallback";
 };
 
+const KNOWN_SITES = new Set(
+  (sitePlansJson as Array<{ category: string; sites: string[] }>)
+    .flatMap((entry) => entry.sites)
+    .map((site) => site.toLowerCase())
+);
+
+function normalizeSiteId(site: string): string {
+  return site
+    .toLowerCase()
+    .trim()
+    .replace(/&/g, "and")
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
+}
+
+function sanitizePlan(plan: string[]): string[] {
+  return [...new Set(plan.map(normalizeSiteId).filter((site) => KNOWN_SITES.has(site)))];
+}
+
 function applyRoutingGuardrails(items: QuoteItem[], category: Category, sitePlan: string[]): { category: Category; site_plan: string[] } {
   const text = items.map((item) => item.query.toLowerCase()).join(" ");
   const groceryHints = ["sugar", "stevia", "sweetener", "coffee", "tea", "snack", "flour", "rice", "food"];
@@ -51,7 +71,7 @@ function ensurePlanCoverage(items: QuoteItem[], category: Category, sitePlan: st
   const unknownDefault = getSitePlan("unknown");
 
   const merged = [...sitePlan, ...categoryDefault, ...fallback.site_plan, ...unknownDefault];
-  const unique = [...new Set(merged.filter((site) => site.trim().length > 0))];
+  const unique = sanitizePlan(merged);
 
   // Never run too narrow plans; sparse plans make results look broken.
   return unique.slice(0, Math.max(4, Math.min(8, unique.length)));
@@ -131,7 +151,7 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
     const parsed = aiResponseSchema.parse(JSON.parse(content));
     const fallback = fallbackCategorize(normalized);
     const safeItems = normalizeItems(parsed.normalized_items);
-    const safeSitePlan = parsed.site_plan.filter((site) => site.trim().length > 0);
+    const safeSitePlan = sanitizePlan(parsed.site_plan);
     const guarded = applyRoutingGuardrails(
       safeItems.length > 0 ? safeItems : normalized,
       parsed.category,

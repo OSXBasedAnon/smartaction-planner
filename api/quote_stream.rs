@@ -1,3 +1,4 @@
+#[path = "../src/shared.rs"]
 mod shared;
 
 use std::sync::Arc;

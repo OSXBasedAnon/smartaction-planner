@@ -113,6 +113,18 @@ fn likely_bot_challenge(lower_body: &str) -> bool {
         || lower_body.contains("bot detection")
 }
 
+fn likely_no_results_page(lower_body: &str) -> bool {
+    lower_body.contains("no results")
+        || lower_body.contains("0 results")
+        || lower_body.contains("0 items")
+        || lower_body.contains("did not match any products")
+        || lower_body.contains("no products found")
+        || lower_body.contains("no exact matches found")
+        || lower_body.contains("nothing matched")
+        || lower_body.contains("sorry, we couldn't find")
+        || lower_body.contains("we couldn't find")
+}
+
 async fn read_body_limited(response: reqwest::Response, max_bytes: usize) -> Result<String, String> {
     let bytes = response.bytes().await.map_err(|e| e.to_string())?;
     let slice = if bytes.len() > max_bytes {
@@ -554,6 +566,20 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
             latency_ms: Some(start.elapsed().as_millis())
         };
     };
+
+    let lower = body.to_lowercase();
+    if likely_no_results_page(&lower) {
+        return SiteMatch {
+            site: site.to_string(),
+            title: extract_title(&body),
+            price: None,
+            currency: Some("USD".to_string()),
+            url: Some(url),
+            status: "not_found".to_string(),
+            message: Some("no_results_page".to_string()),
+            latency_ms: Some(start.elapsed().as_millis())
+        };
+    }
 
     let title = extract_title(&body);
     if title

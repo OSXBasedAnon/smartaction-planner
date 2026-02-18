@@ -250,12 +250,68 @@ button:disabled {
   padding: 18px;
 }
 
+.auth-shell {
+  width: min(960px, 100%);
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 18px;
+}
+
+.auth-side {
+  background: radial-gradient(circle at top left, rgba(143, 88, 255, 0.18), transparent 46%), rgba(17, 26, 40, 0.72);
+  border: 1px solid #2f3f57;
+  border-radius: 16px;
+  padding: 24px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
+.auth-kicker {
+  margin: 0;
+  color: #c5d4e7;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.auth-side h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+  letter-spacing: -0.02em;
+}
+
+.auth-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: #c8d6e8;
+  display: grid;
+  gap: 6px;
+}
+
+.auth-home {
+  width: fit-content;
+}
+
+.auth-home:hover {
+  color: #dce8f6;
+  text-decoration: underline;
+}
+
 .auth-card {
   width: min(440px, 100%);
   background: rgba(17, 26, 40, 0.86);
   border: 1px solid #32445d;
   border-radius: 14px;
   padding: 18px;
+}
+
+.auth-card-strong {
+  width: 100%;
+  display: grid;
+  align-content: center;
+  gap: 12px;
 }
 
 .auth-card h1 {
@@ -277,6 +333,41 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
+}
+
+.auth-form input {
+  border: 1px solid #364a64;
+  background: rgba(12, 17, 26, 0.85);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 130ms ease;
+}
+
+.auth-form input:focus {
+  border-color: color-mix(in srgb, var(--accent) 75%, #ffffff 25%);
+}
+
+.auth-toggle {
+  border: 1px solid #394e68;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d1deef;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.auth-submit {
+  margin-top: 6px;
+}
+
+.auth-switch {
+  margin: 0;
+}
+
+.auth-switch a:hover {
+  text-decoration: underline;
 }
 
 .results-flat .panel {
@@ -382,5 +473,13 @@ button:disabled {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+  }
+
+  .auth-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-side {
+    padding: 18px;
   }
 }

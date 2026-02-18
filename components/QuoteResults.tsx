@@ -5,6 +5,7 @@ import { getVendorSearchUrl } from "@/lib/vendor-links";
 
 type QuoteResultsProps = {
   results: QuoteItemResult[];
+  runId?: string | null;
 };
 
 function normalizeDestination(url: string): string {
@@ -34,7 +35,17 @@ function isListingUrl(url?: string): boolean {
   );
 }
 
-export function QuoteResults({ results }: QuoteResultsProps) {
+function trackHref(params: { target: string; site: string; action: "open_result" | "open_listing"; runId?: string | null; query: string }) {
+  const q = new URLSearchParams();
+  q.set("target", params.target);
+  q.set("site", params.site);
+  q.set("action", params.action);
+  q.set("query", params.query);
+  if (params.runId) q.set("run_id", params.runId);
+  return `/api/track-click?${q.toString()}`;
+}
+
+export function QuoteResults({ results, runId }: QuoteResultsProps) {
   if (results.length === 0) {
     return <p className="small">No results yet.</p>;
   }
@@ -81,11 +92,25 @@ export function QuoteResults({ results }: QuoteResultsProps) {
                     <div className="small">n/a</div>
                   )}
                   {match.url && match.status === "ok" && !isSameDestination(match.url, getVendorSearchUrl(match.site, item.query)) ? (
-                    <a href={match.url} target="_blank" rel="noreferrer">
+                    <a
+                      href={trackHref({ target: match.url, site: match.site, action: "open_result", runId, query: item.query })}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Open result
                     </a>
                   ) : null}
-                  <a href={getVendorSearchUrl(match.site, item.query)} target="_blank" rel="noreferrer">
+                  <a
+                    href={trackHref({
+                      target: getVendorSearchUrl(match.site, item.query),
+                      site: match.site,
+                      action: "open_listing",
+                      runId,
+                      query: item.query
+                    })}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open listing
                   </a>
                 </div>

@@ -17,6 +17,6 @@
   },
   {
     "category": "unknown",
-    "sites": ["amazon", "walmart", "bestbuy", "target", "ebay", "newegg"]
+    "sites": ["amazon", "target", "ebay"]
   }
 ]

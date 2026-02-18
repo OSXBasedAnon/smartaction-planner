@@ -46,10 +46,65 @@ function sanitizePlan(plan: string[]): string[] {
   return [...new Set(plan.map(normalizeSiteId).filter((site) => KNOWN_SITES.has(site)))];
 }
 
+export async function rerankSitePlanWithGemini(
+  items: QuoteItem[],
+  category: Category,
+  candidateSites: string[]
+): Promise<string[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const sanitizedCandidates = sanitizePlan(candidateSites);
+  if (!apiKey || sanitizedCandidates.length < 2) return sanitizedCandidates;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: [
+                    "Return JSON only: {\"site_order\":[\"...\"]}",
+                    "Order by likely success, relevance, and price signal quality.",
+                    `category=${category}`,
+                    `items=${JSON.stringify(items)}`,
+                    `candidates=${JSON.stringify(sanitizedCandidates)}`
+                  ].join("\n")
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json"
+          }
+        })
+      }
+    );
+    if (!response.ok) return sanitizedCandidates;
+    const data = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) return sanitizedCandidates;
+
+    const parsed = JSON.parse(content) as { site_order?: string[] };
+    const ordered = sanitizePlan(parsed.site_order ?? []).filter((site) => sanitizedCandidates.includes(site));
+    const merged = [...ordered, ...sanitizedCandidates];
+    return [...new Set(merged)];
+  } catch {
+    return sanitizedCandidates;
+  }
+}
+
 function applyRoutingGuardrails(items: QuoteItem[], category: Category, sitePlan: string[]): { category: Category; site_plan: string[] } {
   const text = items.map((item) => item.query.toLowerCase()).join(" ");
   const groceryHints = ["sugar", "stevia", "sweetener", "coffee", "tea", "snack", "flour", "rice", "food"];
+  const retailHints = ["shoe", "shoes", "sneaker", "sneakers", "boot", "puma", "nike", "adidas", "hoodie", "shirt", "jeans"];
   const hasGrocerySignal = groceryHints.some((word) => text.includes(word));
+  const hasRetailSignal = retailHints.some((word) => text.includes(word));
 
   if (hasGrocerySignal) {
     const fallback = fallbackCategorize(items);
@@ -59,6 +114,17 @@ function applyRoutingGuardrails(items: QuoteItem[], category: Category, sitePlan
     return {
       category: category === "electronics" ? "restaurant" : category,
       site_plan: unique.length > 0 ? unique : fallback.site_plan
+    };
+  }
+
+  if (hasRetailSignal) {
+    const unknownPlan = getSitePlan("unknown");
+    const allowedRetail = new Set(["amazon", "ebay", "target", "walmart"]);
+    const filtered = sitePlan.filter((site) => allowedRetail.has(site));
+    const merged = [...filtered, ...unknownPlan];
+    return {
+      category: "unknown",
+      site_plan: [...new Set(merged)]
     };
   }
 

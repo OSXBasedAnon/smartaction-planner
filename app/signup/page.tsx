@@ -36,34 +36,48 @@ export default function SignupPage() {
 
   return (
     <main className="auth-wrap">
-      <section className="auth-card">
-        <h1>Create your account</h1>
-        <p className="small">Save quote history, compare runs, and manage sourcing faster.</p>
-        <form onSubmit={onSubmit} className="auth-form">
-          <label>Email</label>
-          <input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          <label>Password</label>
-          <div className="auth-password">
-            <input
-              type={show ? "text" : "password"}
-              placeholder="At least 6 characters"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-            />
-            <button type="button" className="attach-btn" onClick={() => setShow((v) => !v)}>
-              {show ? "Hide" : "Show"}
+      <section className="auth-shell">
+        <aside className="auth-side">
+          <p className="auth-kicker">SupplyFlare</p>
+          <h1>Create your account</h1>
+          <p className="small">Join to keep quote history, capture team workflows, and improve site ranking through usage signals.</p>
+          <ul className="auth-list">
+            <li>Secure email/password auth</li>
+            <li>Private run history</li>
+            <li>Continuous model + catalog improvements</li>
+          </ul>
+          <Link href="/" className="small auth-home">
+            Back to search
+          </Link>
+        </aside>
+
+        <section className="auth-card auth-card-strong">
+          <form onSubmit={onSubmit} className="auth-form">
+            <label>Email</label>
+            <input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <label>Password</label>
+            <div className="auth-password">
+              <input
+                type={show ? "text" : "password"}
+                placeholder="At least 6 characters"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+              />
+              <button type="button" className="auth-toggle" onClick={() => setShow((v) => !v)}>
+                {show ? "Hide" : "Show"}
+              </button>
+            </div>
+            <button type="submit" className="search-btn auth-submit">
+              Sign up
             </button>
-          </div>
-          <button type="submit" className="search-btn">
-            Sign up
-          </button>
-          {error ? <p className="error">{error}</p> : null}
-        </form>
-        <p className="small">
-          Have account? <Link href="/login">Login</Link>
-        </p>
+            {error ? <p className="error">{error}</p> : null}
+          </form>
+          <p className="small auth-switch">
+            Have account? <Link href="/login">Login</Link>
+          </p>
+        </section>
       </section>
     </main>
   );

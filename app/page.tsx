@@ -272,7 +272,7 @@ export default function LandingPage() {
       </section>
 
       <section className="container results-flat" style={{ marginTop: 14 }}>
-        <QuoteResults results={results} />
+        <QuoteResults results={results} runId={runId} />
       </section>
 
       <section className="container meta-strip">

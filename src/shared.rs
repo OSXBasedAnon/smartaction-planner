@@ -67,7 +67,60 @@ pub struct QuoteResponse {
     pub items: Vec<ItemResult>,
 }
 
-fn extract_price_from_body(body: &str) -> Option<f64> {
+fn parse_price(raw: &str) -> Option<f64> {
+    raw.replace(',', "").parse::<f64>().ok()
+}
+
+fn extract_amazon_price(body: &str) -> Option<f64> {
+    let whole_re = Regex::new(r#"a-price-whole">([0-9,]{1,12})<"#).ok()?;
+    let frac_re = Regex::new(r#"a-price-fraction">([0-9]{2})<"#).ok()?;
+    let mut candidates = Vec::new();
+
+    for whole in whole_re.captures_iter(body).take(20) {
+        let Some(w) = whole.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        if let Some(base) = parse_price(w) {
+            if (5.0..=50000.0).contains(&base) {
+                candidates.push(base);
+            }
+        }
+    }
+
+    for pair in whole_re
+        .captures_iter(body)
+        .zip(frac_re.captures_iter(body))
+        .take(20)
+    {
+        let (whole, frac) = pair;
+        let Some(w) = whole.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(f) = frac.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let joined = format!("{}.{}", w.replace(',', ""), f);
+        if let Ok(price) = joined.parse::<f64>() {
+            if (5.0..=50000.0).contains(&price) {
+                candidates.push(price);
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+    candidates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(candidates[candidates.len() / 2])
+}
+
+fn extract_price_from_body(site: &str, body: &str) -> Option<f64> {
+    if matches!(site, "amazon" | "amazon_business") {
+        if let Some(price) = extract_amazon_price(body) {
+            return Some(price);
+        }
+    }
+
     let price_regex = Regex::new(r"\$\s?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)").ok()?;
     let lower = body.to_lowercase();
     let mut candidates: Vec<f64> = Vec::new();
@@ -76,13 +129,13 @@ fn extract_price_from_body(body: &str) -> Option<f64> {
         let Some(full_match) = caps.get(0) else {
             continue;
         };
-        let Some(raw_num) = caps.get(1).map(|m| m.as_str().replace(',', "")) else {
+        let Some(raw_num) = caps.get(1).map(|m| m.as_str()) else {
             continue;
         };
-        let Ok(price) = raw_num.parse::<f64>() else {
+        let Some(price) = parse_price(raw_num) else {
             continue;
         };
-        if !(1.0..=50000.0).contains(&price) {
+        if !(3.0..=50000.0).contains(&price) {
             continue;
         }
 
@@ -103,6 +156,10 @@ fn extract_price_from_body(body: &str) -> Option<f64> {
             continue;
         }
 
+        if price < 10.0 && !raw_num.contains('.') {
+            continue;
+        }
+
         candidates.push(price);
     }
 
@@ -112,10 +169,7 @@ fn extract_price_from_body(body: &str) -> Option<f64> {
 
     candidates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = candidates[candidates.len() / 2];
-    candidates
-        .into_iter()
-        .find(|price| *price >= median * 0.35)
-        .or(Some(median))
+    candidates.into_iter().find(|price| *price >= median * 0.35).or(Some(median))
 }
 
 fn build_headers() -> HeaderMap {
@@ -357,7 +411,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64) -> SiteMatch {
                 .map(|node| node.text().collect::<Vec<_>>().join(" ").trim().to_string())
         });
 
-        let price = extract_price_from_body(&body);
+        let price = extract_price_from_body(site, &body);
         (title, price)
     };
 

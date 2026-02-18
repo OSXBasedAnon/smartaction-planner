@@ -93,6 +93,11 @@ function sanitizeSitePlan(plan: string[]): string[] {
   return [...new Set(plan.map(normalizeSiteId).filter((site) => KNOWN_SITES.has(site)))];
 }
 
+function getStaticPlan(category: string): string[] {
+  const row = (sitePlansJson as Array<{ category: string; sites: string[] }>).find((entry) => entry.category === category);
+  return sanitizeSitePlan(row?.sites ?? []);
+}
+
 function seededFloat(seed: string): number {
   let h = 2166136261;
   for (let i = 0; i < seed.length; i++) {
@@ -125,13 +130,15 @@ async function resolveSitePlanFromSupabase(category: string, fallback: string[])
 }
 
 async function resolveExpandedBasePlan(primaryCategory: string, categoryCandidates: string[], aiPlan: string[]): Promise<string[]> {
-  const plans: string[][] = [aiPlan];
+  const plans: string[][] = [aiPlan, getStaticPlan(primaryCategory)];
   plans.push(await resolveSitePlanFromSupabase(primaryCategory, aiPlan));
 
   for (const candidate of categoryCandidates.slice(0, 3)) {
+    plans.push(getStaticPlan(candidate));
     plans.push(await resolveSitePlanFromSupabase(candidate, []));
   }
 
+  plans.push(getStaticPlan("unknown"));
   plans.push(await resolveSitePlanFromSupabase("unknown", []));
 
   return sanitizeSitePlan(plans.flat().filter((site) => site.trim().length > 0));
@@ -173,7 +180,7 @@ function filterSitesByIntent(sitePlan: string[], intent: "consumer" | "industria
   ]);
 
   if (intent === "consumer") {
-    const filtered = sitePlan.filter((site) => consumerSites.has(site) || officeSites.has(site));
+    const filtered = sitePlan.filter((site) => consumerSites.has(site));
     return filtered.length > 0 ? filtered : sitePlan;
   }
 
@@ -310,21 +317,25 @@ async function persistIntentLearning(
         ? Math.round((prevLatency * Math.max(prevRuns, 1) + entry.latencySum) / (Math.max(prevRuns, 1) + entry.latencyCount))
         : prevLatency;
 
-    await service.from("query_intent_site_stats").upsert(
-      {
-        cluster_key: clusterKey,
-        site,
-        runs_count: nextRuns,
-        success_count: nextSuccess,
-        blocked_count: nextBlocked,
-        unsupported_count: nextUnsupported,
-        error_count: nextError,
-        not_found_count: nextNotFound,
-        avg_latency_ms: nextLatency,
-        last_seen_at: now
-      },
-      { onConflict: "cluster_key,site" }
-    );
+    try {
+      await service.from("query_intent_site_stats").upsert(
+        {
+          cluster_key: clusterKey,
+          site,
+          runs_count: nextRuns,
+          success_count: nextSuccess,
+          blocked_count: nextBlocked,
+          unsupported_count: nextUnsupported,
+          error_count: nextError,
+          not_found_count: nextNotFound,
+          avg_latency_ms: nextLatency,
+          last_seen_at: now
+        },
+        { onConflict: "cluster_key,site" }
+      );
+    } catch {
+      // Non-blocking learning write.
+    }
   }
 }
 
@@ -453,9 +464,10 @@ export async function POST(request: Request) {
   const baseScores = scoreSites(basePlan, catalog);
   const intentStats = service ? await loadIntentSiteStats(service, intentCluster.cluster_key, basePlan) : new Map();
   const banditRanked = rankWithBandit(runId, baseScores, intentStats).slice(0, 12);
-  const rankedSites = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, banditRanked);
+  const rankedWithAi = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, banditRanked);
+  const rankedSites = sanitizeSitePlan([...rankedWithAi, ...getStaticPlan(parsed.category), ...getStaticPlan("unknown")]).slice(0, 12);
 
-  const probeSize = parsed.confidence >= 0.75 ? 4 : 6;
+  const probeSize = parsed.confidence >= 0.75 ? 6 : 8;
   const probeSites = rankedSites.slice(0, probeSize);
   const expansionSites = rankedSites.slice(probeSize);
 

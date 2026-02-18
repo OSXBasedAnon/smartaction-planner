@@ -89,10 +89,16 @@ async function filterEnabledSites(sitePlan: string[]): Promise<string[]> {
   if (!canPersist() || sitePlan.length === 0) return sitePlan;
   try {
     const service = createSupabaseServiceClient();
-    const { data, error } = await service.from("site_catalog").select("site").in("site", sitePlan).eq("enabled", true);
+    const { data, error } = await service.from("site_catalog").select("site, enabled").in("site", sitePlan);
     if (error || !data) return sitePlan;
-    const enabled = new Set(data.map((row) => row.site).filter((v): v is string => typeof v === "string"));
-    const filtered = sitePlan.filter((site) => enabled.has(site));
+    const enabledBySite = new Map<string, boolean>();
+    for (const row of data) {
+      if (typeof row.site === "string") {
+        enabledBySite.set(row.site, row.enabled !== false);
+      }
+    }
+    // Keep unknown sites; only remove explicitly disabled ones.
+    const filtered = sitePlan.filter((site) => enabledBySite.get(site) !== false);
     return filtered.length > 0 ? filtered : sitePlan;
   } catch {
     return sitePlan;

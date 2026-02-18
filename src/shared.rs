@@ -106,6 +106,7 @@ fn pick_user_agent(site: &str, query: &str, attempt: usize) -> &'static str {
 fn likely_bot_challenge(lower_body: &str) -> bool {
     lower_body.contains("enable javascript")
         || lower_body.contains("captcha")
+        || lower_body.contains("pardon our interruption")
         || lower_body.contains("are you a human")
         || lower_body.contains("cloudflare")
         || lower_body.contains("access denied")

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fallbackCategorize, normalizeItems } from "@/lib/site-plan";
+import { fallbackCategorize, getSitePlan, normalizeItems } from "@/lib/site-plan";
 import type { Category, QuoteItem } from "@/lib/types";
 
 const aiResponseSchema = z.object({
@@ -37,6 +37,18 @@ function applyRoutingGuardrails(items: QuoteItem[], category: Category, sitePlan
   }
 
   return { category, site_plan: sitePlan };
+}
+
+function ensurePlanCoverage(items: QuoteItem[], category: Category, sitePlan: string[]): string[] {
+  const fallback = fallbackCategorize(items);
+  const categoryDefault = getSitePlan(category);
+  const unknownDefault = getSitePlan("unknown");
+
+  const merged = [...sitePlan, ...categoryDefault, ...fallback.site_plan, ...unknownDefault];
+  const unique = [...new Set(merged.filter((site) => site.trim().length > 0))];
+
+  // Never run too narrow plans; sparse plans make results look broken.
+  return unique.slice(0, Math.max(4, Math.min(8, unique.length)));
 }
 
 export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
@@ -100,15 +112,17 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
       parsed.category,
       safeSitePlan.length > 0 ? safeSitePlan : fallback.site_plan
     );
+    const covered = ensurePlanCoverage(safeItems.length > 0 ? safeItems : normalized, guarded.category, guarded.site_plan);
     return {
       normalized_items: safeItems.length > 0 ? safeItems : normalized,
       category: guarded.category,
-      site_plan: guarded.site_plan,
+      site_plan: covered,
       source: "ai"
     };
   } catch {
     const fallback = fallbackCategorize(normalized);
     const guarded = applyRoutingGuardrails(normalized, fallback.category, fallback.site_plan);
-    return { normalized_items: normalized, ...guarded, source: "fallback" };
+    const covered = ensurePlanCoverage(normalized, guarded.category, guarded.site_plan);
+    return { normalized_items: normalized, category: guarded.category, site_plan: covered, source: "fallback" };
   }
 }

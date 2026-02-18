@@ -27,6 +27,13 @@ export type ParsedPlan = {
   source: "ai" | "fallback";
 };
 
+export type IntentCluster = {
+  cluster_key: string;
+  labels: string[];
+  confidence: number;
+  source: "ai" | "fallback";
+};
+
 const KNOWN_SITES = new Set(
   (sitePlansJson as Array<{ category: string; sites: string[] }>)
     .flatMap((entry) => entry.sites)
@@ -44,6 +51,86 @@ function normalizeSiteId(site: string): string {
 
 function sanitizePlan(plan: string[]): string[] {
   return [...new Set(plan.map(normalizeSiteId).filter((site) => KNOWN_SITES.has(site)))];
+}
+
+function normalizeToken(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function fallbackClusterKey(items: QuoteItem[], category: Category): string {
+  const tokenStream = items
+    .flatMap((item) => item.query.split(/\s+/))
+    .map((token) => normalizeToken(token))
+    .filter((token) => token.length >= 3);
+  const uniq = [...new Set(tokenStream)].slice(0, 4);
+  return `c_${category}_${uniq.join("_") || "generic"}`;
+}
+
+export async function deriveIntentCluster(items: QuoteItem[], category: Category): Promise<IntentCluster> {
+  const normalizedItems = normalizeItems(items);
+  const fallbackKey = fallbackClusterKey(normalizedItems, category);
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey || normalizedItems.length === 0) {
+    return { cluster_key: fallbackKey, labels: [category], confidence: 0.35, source: "fallback" };
+  }
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: [
+                    "Return JSON only:",
+                    '{"cluster_key":"short_snake_case","labels":["..."],"confidence":0.0}',
+                    "cluster_key must represent product intent family and stay stable for similar phrasing.",
+                    `category=${category}`,
+                    `items=${JSON.stringify(normalizedItems)}`
+                  ].join("\n")
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json"
+          }
+        })
+      }
+    );
+
+    if (!response.ok) throw new Error(`intent_cluster_failed_${response.status}`);
+    const data = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) throw new Error("intent_cluster_no_content");
+
+    const parsed = JSON.parse(content) as { cluster_key?: string; labels?: string[]; confidence?: number };
+    const normalizedKey = normalizeToken(parsed.cluster_key ?? "");
+    const labels = (parsed.labels ?? [])
+      .map((label) => normalizeToken(label))
+      .filter((label) => label.length > 0)
+      .slice(0, 6);
+
+    return {
+      cluster_key: normalizedKey.length > 0 ? `c_${normalizedKey}` : fallbackKey,
+      labels: labels.length > 0 ? labels : [category],
+      confidence: typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0.7,
+      source: "ai"
+    };
+  } catch {
+    return { cluster_key: fallbackKey, labels: [category], confidence: 0.4, source: "fallback" };
+  }
 }
 
 export async function rerankSitePlanWithGemini(

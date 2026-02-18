@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import sitePlansJson from "@/config/site-plans.json";
-import { parseAndRoute, rerankSitePlanWithGemini } from "@/lib/ai-parser";
+import { deriveIntentCluster, parseAndRoute, rerankSitePlanWithGemini } from "@/lib/ai-parser";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { createSupabaseServiceClient } from "@/lib/supabase-service";
 
@@ -63,6 +63,17 @@ type SiteStats = {
   latencyCount: number;
 };
 
+type IntentSiteRow = {
+  site: string;
+  runs_count?: number;
+  success_count?: number;
+  blocked_count?: number;
+  unsupported_count?: number;
+  error_count?: number;
+  not_found_count?: number;
+  avg_latency_ms?: number;
+};
+
 const KNOWN_SITES = new Set(
   (sitePlansJson as Array<{ category: string; sites: string[] }>)
     .flatMap((entry) => entry.sites)
@@ -80,6 +91,15 @@ function normalizeSiteId(site: string): string {
 
 function sanitizeSitePlan(plan: string[]): string[] {
   return [...new Set(plan.map(normalizeSiteId).filter((site) => KNOWN_SITES.has(site)))];
+}
+
+function seededFloat(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10000) / 10000;
 }
 
 function toNdjson(event: RustEvent) {
@@ -117,45 +137,20 @@ async function resolveExpandedBasePlan(primaryCategory: string, categoryCandidat
   return sanitizeSitePlan(plans.flat().filter((site) => site.trim().length > 0));
 }
 
-function inferIntent(items: Array<{ query: string }>, category: string): "consumer" | "industrial" | "restaurant" | "office" | "unknown" {
-  const text = items.map((item) => item.query.toLowerCase()).join(" ");
+function intentFromSignals(
+  category: string,
+  labels: string[]
+): "consumer" | "industrial" | "restaurant" | "office" | "unknown" {
+  const joined = labels.join(" ");
+  if (joined.includes("industrial") || joined.includes("electrical") || joined.includes("mro")) return "industrial";
+  if (joined.includes("restaurant") || joined.includes("foodservice")) return "restaurant";
+  if (joined.includes("office")) return "office";
+  if (joined.includes("consumer") || joined.includes("gaming") || joined.includes("electronics")) return "consumer";
+
   if (category === "restaurant") return "restaurant";
   if (category === "office") return "office";
-
-  const consumerHints = [
-    "macbook",
-    "laptop",
-    "keyboard",
-    "controller",
-    "playstation",
-    "xbox",
-    "speaker",
-    "monitor",
-    "headphone",
-    "phone",
-    "tablet",
-    "alienware",
-    "gpu",
-    "ssd",
-    "tv"
-  ];
-  const industrialHints = [
-    "conduit",
-    "breaker",
-    "electrical wire",
-    "awg",
-    "junction box",
-    "circuit",
-    "contact block",
-    "receptacle",
-    "nema"
-  ];
-
-  if (consumerHints.some((hint) => text.includes(hint))) return "consumer";
-  if (industrialHints.some((hint) => text.includes(hint))) return "industrial";
-
-  if (category === "electronics") return "consumer";
   if (category === "electrical") return "industrial";
+  if (category === "electronics") return "consumer";
   return "unknown";
 }
 
@@ -284,8 +279,57 @@ async function persistSiteLearning(
   }
 }
 
+async function persistIntentLearning(
+  service: ReturnType<typeof createSupabaseServiceClient>,
+  clusterKey: string,
+  stats: Map<string, SiteStats>,
+  currentIntentStats: Map<string, IntentSiteRow>
+) {
+  if (clusterKey.length === 0 || stats.size === 0) return;
+
+  const now = new Date().toISOString();
+  for (const [site, entry] of stats) {
+    const current = currentIntentStats.get(site);
+    const prevRuns = current?.runs_count ?? 0;
+    const prevSuccess = current?.success_count ?? 0;
+    const prevBlocked = current?.blocked_count ?? 0;
+    const prevUnsupported = current?.unsupported_count ?? 0;
+    const prevError = current?.error_count ?? 0;
+    const prevNotFound = current?.not_found_count ?? 0;
+    const prevLatency = current?.avg_latency_ms ?? 2200;
+
+    const nextRuns = prevRuns + entry.runs;
+    const nextSuccess = prevSuccess + entry.ok;
+    const nextBlocked = prevBlocked + entry.blocked;
+    const nextUnsupported = prevUnsupported + entry.unsupported;
+    const nextError = prevError + entry.error;
+    const nextNotFound = prevNotFound + entry.notFound;
+
+    const nextLatency =
+      entry.latencyCount > 0
+        ? Math.round((prevLatency * Math.max(prevRuns, 1) + entry.latencySum) / (Math.max(prevRuns, 1) + entry.latencyCount))
+        : prevLatency;
+
+    await service.from("query_intent_site_stats").upsert(
+      {
+        cluster_key: clusterKey,
+        site,
+        runs_count: nextRuns,
+        success_count: nextSuccess,
+        blocked_count: nextBlocked,
+        unsupported_count: nextUnsupported,
+        error_count: nextError,
+        not_found_count: nextNotFound,
+        avg_latency_ms: nextLatency,
+        last_seen_at: now
+      },
+      { onConflict: "cluster_key,site" }
+    );
+  }
+}
+
 function scoreSites(sitePlan: string[], catalog: Map<string, SiteCatalogRow>) {
-  const scored = sitePlan
+  return sitePlan
     .map((site) => {
       const row = catalog.get(site);
       if (row?.enabled === false) {
@@ -301,11 +345,69 @@ function scoreSites(sitePlan: string[], catalog: Map<string, SiteCatalogRow>) {
       const score = 1000 - priority * 3 + reliability * 420 - blockRate * 240 - latency / 45 - jsPenalty;
       return { site, score };
     })
-    .filter((row) => Number.isFinite(row.score) && row.score > -1e9)
-    .sort((a, b) => b.score - a.score)
-    .map((row) => row.site);
+    .filter((row) => Number.isFinite(row.score) && row.score > -1e9);
+}
 
-  return scored.length > 0 ? scored : sitePlan;
+async function loadIntentSiteStats(
+  service: ReturnType<typeof createSupabaseServiceClient>,
+  clusterKey: string,
+  sites: string[]
+): Promise<Map<string, IntentSiteRow>> {
+  if (sites.length === 0) return new Map();
+  try {
+    const { data, error } = await service
+      .from("query_intent_site_stats")
+      .select("site,runs_count,success_count,blocked_count,unsupported_count,error_count,not_found_count,avg_latency_ms")
+      .eq("cluster_key", clusterKey)
+      .in("site", sites);
+
+    if (error || !data) return new Map();
+    return new Map(data.map((row) => [row.site, row as IntentSiteRow]));
+  } catch {
+    return new Map();
+  }
+}
+
+function rankWithBandit(
+  runId: string,
+  baseScores: Array<{ site: string; score: number }>,
+  intentStats: Map<string, IntentSiteRow>
+): string[] {
+  const totalRuns = Array.from(intentStats.values()).reduce((acc, row) => acc + (row.runs_count ?? 0), 0);
+
+  const scored = baseScores.map((entry) => {
+    const stat = intentStats.get(entry.site);
+    const runs = stat?.runs_count ?? 0;
+    const success = stat?.success_count ?? 0;
+    const blocked = (stat?.blocked_count ?? 0) + (stat?.unsupported_count ?? 0);
+    const latency = stat?.avg_latency_ms ?? 2200;
+
+    const successRate = runs > 0 ? success / runs : 0.55;
+    const blockRate = runs > 0 ? blocked / runs : 0.35;
+    const intentSignal = successRate * 260 - blockRate * 200 - latency / 80;
+    const exploreBonus = 95 * Math.sqrt(Math.log(totalRuns + 2) / (runs + 1));
+
+    return {
+      site: entry.site,
+      score: entry.score + intentSignal + exploreBonus,
+      runs
+    };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const exploreChance = 0.16;
+  if (scored.length > 4 && seededFloat(`${runId}:explore`) < exploreChance) {
+    const cold = scored
+      .filter((row) => row.runs < 3)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 2)
+      .map((row) => row.site);
+    const warm = scored.map((row) => row.site).filter((site) => !cold.includes(site));
+    return [...warm.slice(0, 3), ...cold, ...warm.slice(3)];
+  }
+
+  return scored.map((row) => row.site);
 }
 
 function buildSiteOverrides(sitePlan: string[], catalog: Map<string, SiteCatalogRow>): Record<string, string> {
@@ -341,20 +443,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No valid items in request" }, { status: 400 });
   }
 
+  const service = canPersist() ? createSupabaseServiceClient() : null;
+  const intentCluster = await deriveIntentCluster(parsed.normalized_items, parsed.category);
   const candidateCategories = parsed.confidence >= 0.72 ? [] : parsed.category_candidates;
   const basePlanUnfiltered = await resolveExpandedBasePlan(parsed.category, candidateCategories, parsed.site_plan);
-  const intent = inferIntent(parsed.normalized_items, parsed.category);
+  const intent = intentFromSignals(parsed.category, intentCluster.labels);
   const basePlan = filterSitesByIntent(basePlanUnfiltered, intent);
   const catalog = await loadSiteCatalog(basePlan);
-  const scoredSites = scoreSites(basePlan, catalog).slice(0, 12);
-  const rankedSites = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, scoredSites);
+  const baseScores = scoreSites(basePlan, catalog);
+  const intentStats = service ? await loadIntentSiteStats(service, intentCluster.cluster_key, basePlan) : new Map();
+  const banditRanked = rankWithBandit(runId, baseScores, intentStats).slice(0, 12);
+  const rankedSites = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, banditRanked);
 
   const probeSize = parsed.confidence >= 0.75 ? 4 : 6;
   const probeSites = rankedSites.slice(0, probeSize);
   const expansionSites = rankedSites.slice(probeSize);
 
   let userId: string | null = null;
-  const service = canPersist() ? createSupabaseServiceClient() : null;
 
   try {
     const supabase = await createSupabaseServerClient();
@@ -538,6 +643,7 @@ export async function POST(request: Request) {
         }
         if (service) {
           await persistSiteLearning(service, siteStats, catalog);
+          await persistIntentLearning(service, intentCluster.cluster_key, siteStats, intentStats);
         }
         controller.enqueue(encoder.encode(toNdjson({ type: "done", duration_ms: durationMs })));
       } catch (error) {

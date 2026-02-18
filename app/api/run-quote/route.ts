@@ -471,6 +471,7 @@ function buildSiteOverrides(sitePlan: string[], catalog: Map<string, SiteCatalog
 
 async function loadDiscoveredDomainCandidates(
   service: ReturnType<typeof createSupabaseServiceClient> | null,
+  clusterKey: string,
   query: string,
   limit = 6
 ): Promise<Array<{ site: string; template: string }>> {
@@ -481,7 +482,7 @@ async function loadDiscoveredDomainCandidates(
     const { data, error } = await service
       .from("site_discoveries")
       .select("merchant_domain,created_at")
-      .ilike("query", `%${token}%`)
+      .or(`cluster_key.eq.${clusterKey},query.ilike.%${token}%`)
       .order("created_at", { ascending: false })
       .limit(40);
     if (error || !data) return [];
@@ -533,7 +534,12 @@ export async function POST(request: Request) {
   const rankedWithAi = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, banditRanked);
   const rankedSites = sanitizeSitePlan([...rankedWithAi, ...getStaticPlan(parsed.category), ...getStaticPlan("unknown")]).slice(0, 12);
   const siteUniverse = await loadEnabledSiteUniverse();
-  const discoveredCandidates = await loadDiscoveredDomainCandidates(service, parsed.normalized_items[0]?.query ?? "", 6);
+  const discoveredCandidates = await loadDiscoveredDomainCandidates(
+    service,
+    intentCluster.cluster_key,
+    parsed.normalized_items[0]?.query ?? "",
+    6
+  );
   const seedDynamicOverrides: Record<string, string> = Object.fromEntries(
     discoveredCandidates.map((candidate) => [candidate.site, candidate.template])
   );
@@ -639,6 +645,7 @@ export async function POST(request: Request) {
                 await service.from("site_discoveries").insert({
                   run_id: runId,
                   user_id: userId,
+                  cluster_key: intentCluster.cluster_key,
                   query: parsed.normalized_items[itemIndex]?.query ?? "",
                   source: "google_shopping",
                   merchant_domain: domain

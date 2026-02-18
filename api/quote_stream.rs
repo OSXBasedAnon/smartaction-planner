@@ -16,7 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use vercel_runtime::{Error, Request, ResponseBody};
 
-use shared::{QuoteRequest, best_from_matches, scrape_site};
+use shared::{QuoteRequest, best_from_matches, scrape_site_multi};
 
 fn sse_line(payload: serde_json::Value) -> String {
     format!("data: {}\n\n", payload)
@@ -90,7 +90,7 @@ async fn handler(request: Request) -> Result<Response<ResponseBody>, Error> {
                 async move {
                     let permit = sem.acquire_owned().await;
                     let Ok(_permit) = permit else {
-                        return shared::SiteMatch {
+                        return vec![shared::SiteMatch {
                             site: site_clone.clone(),
                             title: None,
                             price: None,
@@ -99,25 +99,27 @@ async fn handler(request: Request) -> Result<Response<ResponseBody>, Error> {
                             status: "error".to_string(),
                             message: Some("semaphore_closed".to_string()),
                             latency_ms: Some(0)
-                        };
+                        }];
                     };
-                    scrape_site(&site, &query_clone, ttl, overrides.as_ref()).await
+                    scrape_site_multi(&site, &query_clone, ttl, overrides.as_ref()).await
                 }
             });
 
             let mut matches = Vec::new();
             let mut scrape_stream = stream::iter(tasks).buffer_unordered(20);
 
-            while let Some(result) = scrape_stream.next().await {
-                let _ = tx
-                    .send(Ok(Frame::data(Bytes::from(sse_line(json!({
-                        "type": "match",
-                        "item_index": item_index,
-                        "query": query,
-                        "match": result
-                    }))))))
-                    .await;
-                matches.push(result);
+            while let Some(results) = scrape_stream.next().await {
+                for result in results {
+                    let _ = tx
+                        .send(Ok(Frame::data(Bytes::from(sse_line(json!({
+                            "type": "match",
+                            "item_index": item_index,
+                            "query": query,
+                            "match": result
+                        }))))))
+                        .await;
+                    matches.push(result);
+                }
             }
 
             let best = best_from_matches(&matches);

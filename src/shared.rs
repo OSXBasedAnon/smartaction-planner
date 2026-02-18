@@ -148,6 +148,12 @@ fn unescape_url(raw: &str) -> String {
         .replace("&amp;", "&")
 }
 
+fn push_unique_url(out: &mut Vec<String>, url: String) {
+    if !out.contains(&url) {
+        out.push(url);
+    }
+}
+
 fn query_tokens(query: &str) -> Vec<String> {
     const STOPWORDS: [&str; 20] = [
         "the", "and", "for", "with", "from", "that", "this", "your", "you", "new", "sale", "best", "buy", "item",
@@ -178,30 +184,106 @@ fn relevance_score(text: &str, query: &str) -> i32 {
     score
 }
 
-fn extract_result_url(site: &str, body: &str, query: &str) -> Option<String> {
+fn extract_result_urls(site: &str, body: &str, query: &str, max_results: usize) -> Vec<String> {
+    let max_results = max_results.max(1);
+    let mut out: Vec<String> = Vec::new();
+
     match site {
         "amazon" | "amazon_business" => {
-            let path = first_capture(body, r#"href=\"(/(?:gp|dp|[^"]*?/dp/)[^"]+)\""#)?;
-            Some(format!("https://www.amazon.com{}", unescape_url(&path)))
+            let Some(re) = Regex::new(r#"href=\"(/(?:gp|dp|[^"]*?/dp/)[^"]+)\""#).ok() else {
+                return vec![];
+            };
+            for caps in re.captures_iter(body).take(30) {
+                let Some(path) = caps.get(1).map(|m| m.as_str()) else {
+                    continue;
+                };
+                push_unique_url(&mut out, format!("https://www.amazon.com{}", unescape_url(path)));
+                if out.len() >= max_results {
+                    break;
+                }
+            }
         }
         "newegg" => {
-            first_capture(body, r#"href=\"(https://www\.newegg\.com/p/[^\"]+)\""#)
-                .or_else(|| first_capture(body, r#"href=\"(/p/[^\"]+)\""#).map(|path| format!("https://www.newegg.com{}", unescape_url(&path))))
+            let Some(re_abs) = Regex::new(r#"href=\"(https://www\.newegg\.com/p/[^\"]+)\""#).ok() else {
+                return vec![];
+            };
+            for caps in re_abs.captures_iter(body).take(25) {
+                if let Some(url) = caps.get(1).map(|m| m.as_str()) {
+                    push_unique_url(&mut out, unescape_url(url));
+                    if out.len() >= max_results {
+                        break;
+                    }
+                }
+            }
+            if out.len() < max_results {
+                if let Some(re_rel) = Regex::new(r#"href=\"(/p/[^\"]+)\""#).ok() {
+                    for caps in re_rel.captures_iter(body).take(25) {
+                        if let Some(path) = caps.get(1).map(|m| m.as_str()) {
+                            push_unique_url(&mut out, format!("https://www.newegg.com{}", unescape_url(path)));
+                            if out.len() >= max_results {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
         "bestbuy" => {
-            let path = first_capture(body, r#"href=\"(/site/[^"]+\.p\?[^"]*)\""#)
-                .or_else(|| first_capture(body, r#"href=\"(/site/[^"]+\.p)\""#))?;
-            Some(format!("https://www.bestbuy.com{}", unescape_url(&path)))
+            let patterns = [r#"href=\"(/site/[^"]+\.p\?[^"]*)\""#, r#"href=\"(/site/[^"]+\.p)\""#];
+            for pattern in patterns {
+                if let Some(re) = Regex::new(pattern).ok() {
+                    for caps in re.captures_iter(body).take(25) {
+                        if let Some(path) = caps.get(1).map(|m| m.as_str()) {
+                            push_unique_url(&mut out, format!("https://www.bestbuy.com{}", unescape_url(path)));
+                            if out.len() >= max_results {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if out.len() >= max_results {
+                    break;
+                }
+            }
         }
         "ebay" => {
-            first_capture(body, r#"href=\"(https://www\.ebay\.com/itm/[^\"]+)\""#)
-                .or_else(|| first_capture(body, r#""itemWebUrl"\s*:\s*"(https://www\.ebay\.com/itm/[^"]+)""#))
-                .or_else(|| first_capture(body, r#"href="(https://www\.ebay\.com/itm/[^"]+)""#))
-                .map(|url| unescape_url(&url))
+            let patterns = [
+                r#"href=\"(https://www\.ebay\.com/itm/[^\"]+)\""#,
+                r#""itemWebUrl"\s*:\s*"(https://www\.ebay\.com/itm/[^"]+)""#,
+                r#"href="(https://www\.ebay\.com/itm/[^"]+)""#
+            ];
+            for pattern in patterns {
+                if let Some(re) = Regex::new(pattern).ok() {
+                    for caps in re.captures_iter(body).take(30) {
+                        if let Some(url) = caps.get(1).map(|m| m.as_str()) {
+                            push_unique_url(&mut out, unescape_url(url));
+                            if out.len() >= max_results {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if out.len() >= max_results {
+                    break;
+                }
+            }
         }
-        "target" => first_capture(body, r#"href=\"(https://www\.target\.com/p/[^\"]+)\""#),
+        "target" => {
+            if let Some(re) = Regex::new(r#"href=\"(https://www\.target\.com/p/[^\"]+)\""#).ok() {
+                for caps in re.captures_iter(body).take(20) {
+                    if let Some(url) = caps.get(1).map(|m| m.as_str()) {
+                        push_unique_url(&mut out, unescape_url(url));
+                        if out.len() >= max_results {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         "microcenter" => {
-            let re = Regex::new(r#"href=\"(/product/[0-9]+/[^\"]+)\""#).ok()?;
+            let Some(re) = Regex::new(r#"href=\"(/product/[0-9]+/[^\"]+)\""#).ok() else {
+                return out;
+            };
             let mut best: Option<(i32, String)> = None;
             for caps in re.captures_iter(body).take(24) {
                 let Some(path) = caps.get(1).map(|m| m.as_str()) else {
@@ -214,22 +296,51 @@ fn extract_result_url(site: &str, body: &str, query: &str) -> Option<String> {
                     _ => best = Some((score, full)),
                 }
             }
-            best.and_then(|(score, url)| if score > 0 { Some(url) } else { None })
+            if let Some((score, url)) = best {
+                if score > 0 {
+                    push_unique_url(&mut out, url);
+                }
+            }
         }
         "officedepot" => {
-            first_capture(body, r#"href=\"(https://www\.officedepot\.com/a/products/[^\"]+)\""#)
-                .map(|url| unescape_url(&url))
+            if let Some(re) = Regex::new(r#"href=\"(https://www\.officedepot\.com/a/products/[^\"]+)\""#).ok() {
+                for caps in re.captures_iter(body).take(25) {
+                    if let Some(url) = caps.get(1).map(|m| m.as_str()) {
+                        push_unique_url(&mut out, unescape_url(url));
+                        if out.len() >= max_results {
+                            break;
+                        }
+                    }
+                }
+            }
         }
         "quill" => {
-            first_capture(body, r#"href=\"(https://www\.quill\.com/[^\"]+/cbs/[^\"]+)\""#)
-                .map(|url| unescape_url(&url))
+            if let Some(re) = Regex::new(r#"href=\"(https://www\.quill\.com/[^\"]+/cbs/[^\"]+)\""#).ok() {
+                for caps in re.captures_iter(body).take(25) {
+                    if let Some(url) = caps.get(1).map(|m| m.as_str()) {
+                        push_unique_url(&mut out, unescape_url(url));
+                        if out.len() >= max_results {
+                            break;
+                        }
+                    }
+                }
+            }
         }
         "google_shopping" => {
-            first_capture(body, r#"href=\"(/shopping/product/[^\"]+)\""#)
-                .map(|path| format!("https://www.google.com{}", unescape_url(&path)))
+            if let Some(re) = Regex::new(r#"href=\"(/shopping/product/[^\"]+)\""#).ok() {
+                for caps in re.captures_iter(body).take(20) {
+                    if let Some(path) = caps.get(1).map(|m| m.as_str()) {
+                        push_unique_url(&mut out, format!("https://www.google.com{}", unescape_url(path)));
+                        if out.len() >= max_results {
+                            break;
+                        }
+                    }
+                }
+            }
         }
-        _ => None
+        _ => {}
     }
+    out
 }
 
 fn extract_google_shopping_domains(body: &str) -> Vec<String> {
@@ -395,6 +506,70 @@ fn extract_price_from_body(site: &str, body: &str) -> Option<f64> {
     candidates.into_iter().find(|price| *price >= median * 0.35).or(Some(median))
 }
 
+fn extract_price_candidates_from_body(site: &str, body: &str, max_results: usize) -> Vec<f64> {
+    let max_results = max_results.max(1);
+    let mut out: Vec<f64> = Vec::new();
+
+    if let Some(p) = extract_price_from_json_ld(body) {
+        out.push(p);
+    }
+
+    if matches!(site, "amazon" | "amazon_business") {
+        if let Some(p) = extract_amazon_price(body) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+
+    let price_regex = Regex::new(r"\$\s?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)").ok();
+    let lower = body.to_lowercase();
+    if let Some(re) = price_regex {
+        for caps in re.captures_iter(body).take(160) {
+            let Some(full_match) = caps.get(0) else {
+                continue;
+            };
+            let Some(raw_num) = caps.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            let Some(price) = parse_price(raw_num) else {
+                continue;
+            };
+            if !(3.0..=50000.0).contains(&price) {
+                continue;
+            }
+            let ctx_start = full_match.start().saturating_sub(24);
+            let ctx_end = (full_match.end() + 24).min(lower.len());
+            let context = &lower[ctx_start..ctx_end];
+            if context.contains("/mo")
+                || context.contains("month")
+                || context.contains("monthly")
+                || context.contains("financing")
+                || context.contains("per wk")
+                || context.contains("weekly")
+            {
+                continue;
+            }
+            if context.contains("shipping") && price < 20.0 {
+                continue;
+            }
+            if price < 10.0 && !raw_num.contains('.') {
+                continue;
+            }
+            if !out.contains(&price) {
+                out.push(price);
+            }
+            if out.len() >= (max_results * 4) {
+                break;
+            }
+        }
+    }
+
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(max_results);
+    out
+}
+
 fn build_headers_with_ua(user_agent: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Ok(value) = HeaderValue::from_str(user_agent) {
@@ -546,15 +721,29 @@ pub async fn upsert_cache(site: &str, query: &str, payload: &SiteMatch) {
         .await;
 }
 
-pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&HashMap<String, String>>) -> SiteMatch {
+async fn fetch_reader_fallback(url: &str) -> Option<String> {
+    let reader_url = format!("https://r.jina.ai/http://{}", url.trim_start_matches("https://").trim_start_matches("http://"));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let response = client.get(reader_url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.text().await.ok()
+}
+
+pub async fn scrape_site_multi(site: &str, query: &str, ttl: u64, overrides: Option<&HashMap<String, String>>) -> Vec<SiteMatch> {
     let start = Instant::now();
+    let max_results = 4usize;
 
     if let Some(cached) = maybe_get_cache(site, query, ttl).await {
-        return SiteMatch {
+        return vec![SiteMatch {
             status: "cached".to_string(),
             latency_ms: Some(start.elapsed().as_millis()),
             ..cached
-        };
+        }];
     }
 
     let url = site_url(site, query, overrides);
@@ -567,7 +756,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
         let client = match reqwest::Client::builder().default_headers(build_headers_with_ua(ua)).build() {
             Ok(c) => c,
             Err(error) => {
-                return SiteMatch {
+                return vec![SiteMatch {
                     site: site.to_string(),
                     title: None,
                     price: None,
@@ -576,7 +765,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
                     status: "error".to_string(),
                     message: Some(format!("client_init_failed: {error}")),
                     latency_ms: Some(start.elapsed().as_millis())
-                }
+                }]
             }
         };
 
@@ -631,7 +820,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 continue;
             }
-            return SiteMatch {
+            return vec![SiteMatch {
                 site: site.to_string(),
                 title: None,
                 price: None,
@@ -640,7 +829,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
                 status: "unsupported_js".to_string(),
                 message: Some("site requires browser execution or anti-bot challenge".to_string()),
                 latency_ms: Some(start.elapsed().as_millis())
-            };
+            }];
         }
 
         final_body = Some(body);
@@ -650,7 +839,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
     let body = if let Some(body) = final_body {
         body
     } else if matches!(final_status, Some(403 | 429 | 503)) || matches!(last_message.as_deref(), Some("challenge_detected")) {
-        return SiteMatch {
+        return vec![SiteMatch {
             site: site.to_string(),
             title: None,
             price: None,
@@ -659,9 +848,24 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
             status: "blocked".to_string(),
             message: last_message.or_else(|| final_status.map(|s| format!("http_status_{s}"))),
             latency_ms: Some(start.elapsed().as_millis())
-        };
+        }];
     } else {
-        return SiteMatch {
+        if let Some(fallback_body) = fetch_reader_fallback(&url).await {
+            let fallback_price = extract_price_from_body(site, &fallback_body);
+            if fallback_price.is_some() {
+                return vec![SiteMatch {
+                    site: site.to_string(),
+                    title: extract_title(&fallback_body),
+                    price: fallback_price,
+                    currency: Some("USD".to_string()),
+                    url: Some(url),
+                    status: "ok".to_string(),
+                    message: Some("reader_fallback".to_string()),
+                    latency_ms: Some(start.elapsed().as_millis())
+                }];
+            }
+        }
+        return vec![SiteMatch {
             site: site.to_string(),
             title: None,
             price: None,
@@ -670,12 +874,12 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
             status: "error".to_string(),
             message: last_message.or(Some("request_failed".to_string())),
             latency_ms: Some(start.elapsed().as_millis())
-        };
+        }];
     };
 
     let lower = body.to_lowercase();
     if likely_no_results_page(&lower) {
-        return SiteMatch {
+        return vec![SiteMatch {
             site: site.to_string(),
             title: extract_title(&body),
             price: None,
@@ -684,7 +888,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
             status: "not_found".to_string(),
             message: Some("no_results_page".to_string()),
             latency_ms: Some(start.elapsed().as_millis())
-        };
+        }];
     }
 
     let title = extract_title(&body);
@@ -693,7 +897,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
         .map(|t| t.to_lowercase().contains("pardon our interruption"))
         .unwrap_or(false)
     {
-        return SiteMatch {
+        return vec![SiteMatch {
             site: site.to_string(),
             title,
             price: None,
@@ -702,43 +906,83 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
             status: "blocked".to_string(),
             message: Some("anti_bot_interruption_page".to_string()),
             latency_ms: Some(start.elapsed().as_millis())
-        };
+        }];
     }
-    let price = extract_price_from_body(site, &body);
-    let result_url = extract_result_url(site, &body, query);
+    let prices = extract_price_candidates_from_body(site, &body, max_results);
+    let result_urls = extract_result_urls(site, &body, query, max_results);
 
     let discovery_domains = if site == "google_shopping" {
         extract_google_shopping_domains(&body)
     } else {
         Vec::new()
     };
-    let status = if price.is_some() || (site == "google_shopping" && !discovery_domains.is_empty()) {
+    let status = if !prices.is_empty() || (site == "google_shopping" && !discovery_domains.is_empty()) {
         "ok"
     } else {
         "not_found"
     }
     .to_string();
 
-    let result = SiteMatch {
-        site: site.to_string(),
-        title,
-        price,
-        currency: Some("USD".to_string()),
-        url: result_url.or(Some(url)),
-        status,
-        message: if site == "google_shopping" && !discovery_domains.is_empty() {
-            Some(format!("discovery_domains={}", discovery_domains.join(",")))
-        } else {
-            None
-        },
-        latency_ms: Some(start.elapsed().as_millis())
-    };
-
-    if matches!(result.status.as_str(), "ok" | "not_found") {
-        upsert_cache(site, query, &result).await;
+    if status == "not_found" {
+        return vec![SiteMatch {
+            site: site.to_string(),
+            title,
+            price: None,
+            currency: Some("USD".to_string()),
+            url: Some(url),
+            status,
+            message: if site == "google_shopping" && !discovery_domains.is_empty() {
+                Some(format!("discovery_domains={}", discovery_domains.join(",")))
+            } else {
+                None
+            },
+            latency_ms: Some(start.elapsed().as_millis())
+        }];
     }
 
-    result
+    let count = prices.len().max(result_urls.len()).max(1).min(max_results);
+    let mut results = Vec::with_capacity(count);
+    for idx in 0..count {
+        let picked_price = prices.get(idx).copied().or_else(|| prices.first().copied());
+        results.push(SiteMatch {
+            site: site.to_string(),
+            title: title.clone(),
+            price: picked_price,
+            currency: Some("USD".to_string()),
+            url: result_urls.get(idx).cloned().or_else(|| result_urls.first().cloned()).or(Some(url.clone())),
+            status: "ok".to_string(),
+            message: if site == "google_shopping" && !discovery_domains.is_empty() {
+                Some(format!("discovery_domains={}", discovery_domains.join(",")))
+            } else {
+                None
+            },
+            latency_ms: Some(start.elapsed().as_millis())
+        });
+    }
+
+    if let Some(first) = results.first() {
+        upsert_cache(site, query, first).await;
+    }
+
+    results
+}
+
+pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&HashMap<String, String>>) -> SiteMatch {
+    let mut results = scrape_site_multi(site, query, ttl, overrides).await;
+    if results.is_empty() {
+        SiteMatch {
+            site: site.to_string(),
+            title: None,
+            price: None,
+            currency: Some("USD".to_string()),
+            url: Some(site_url(site, query, overrides)),
+            status: "not_found".to_string(),
+            message: Some("no_result_entries".to_string()),
+            latency_ms: Some(0)
+        }
+    } else {
+        results.remove(0)
+    }
 }
 
 pub fn best_from_matches(matches: &[SiteMatch]) -> Option<BestMatch> {
@@ -804,18 +1048,19 @@ pub async fn run_quote_collect(request: &QuoteRequest) -> Result<Vec<ItemResult>
                         message: Some("semaphore_closed".to_string()),
                         latency_ms: Some(0)
                     };
-                    return (site, fallback);
+                    return (site, vec![fallback]);
                 };
-                let result = scrape_site(&site, &query, ttl, overrides.as_ref()).await;
+                let result = scrape_site_multi(&site, &query, ttl, overrides.as_ref()).await;
                 (site, result)
             }
         });
 
-        let mut matches: Vec<SiteMatch> = stream::iter(tasks)
+        let nested: Vec<Vec<SiteMatch>> = stream::iter(tasks)
             .buffer_unordered(20)
             .then(|(_, result)| async move { result })
             .collect()
             .await;
+        let mut matches: Vec<SiteMatch> = nested.into_iter().flatten().collect();
 
         matches.sort_by(|a, b| a.site.cmp(&b.site));
         let best = best_from_matches(&matches);

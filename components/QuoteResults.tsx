@@ -15,7 +15,7 @@ export function QuoteResults({ results }: QuoteResultsProps) {
     <div className="grid">
       <p className="small">Pricing may exclude shipping/tax. Site availability can be partial.</p>
       {results.map((item) => (
-        <div key={item.query} className="panel">
+        <div key={item.query} className="panel result-card">
           <h3>{item.query}</h3>
           {item.best ? (
             <p className="ok">
@@ -24,9 +24,9 @@ export function QuoteResults({ results }: QuoteResultsProps) {
           ) : (
             <p className="small">No best price yet.</p>
           )}
-          <div className="grid">
+          <div className="vendor-grid">
             {item.matches.map((match, index) => (
-              <div key={`${match.site}-${index}`} className="panel" style={{ padding: 10 }}>
+              <div key={`${match.site}-${index}`} className="vendor-card">
                 <strong>{match.site}</strong>
                 <div className="small">status: {match.status}</div>
                 {typeof match.price === "number" ? <div>${match.price.toFixed(2)}</div> : null}

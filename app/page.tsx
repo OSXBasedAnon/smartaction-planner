@@ -111,33 +111,42 @@ export default function LandingPage() {
 
   return (
     <main className="container grid" style={{ gap: 16 }}>
-      <header className="row" style={{ justifyContent: "space-between" }}>
-        <div>
+      <header className="topbar">
+        <div className="hero">
           <h1>SupplyFlare</h1>
           <p className="small">High-speed quote discovery across multiple vendors</p>
         </div>
-        <div className="row">
-          <Link href="/app">Dashboard</Link>
-          <Link href="/login">Login</Link>
-          <Link href="/signup">Sign up</Link>
+        <div className="nav-links">
+          <Link href="/app" className="nav-pill">
+            Dashboard
+          </Link>
+          <Link href="/login" className="nav-pill">
+            Login
+          </Link>
+          <Link href="/signup" className="nav-pill">
+            Sign up
+          </Link>
         </div>
       </header>
 
-      <section className="panel grid" style={{ gap: 14 }}>
-        <SearchInput onItems={setItems} />
-        <CSVUploader onItems={setItems} />
-        <div className="row">
-          <button type="button" onClick={runQuote} disabled={running || items.length === 0}>
-            Run Quote
-          </button>
-          <RuntimeTimer running={running} finishedDurationMs={duration} />
+      <section className="quote-layout">
+        <div className="panel control-block">
+          <SearchInput onItems={setItems} />
+          <CSVUploader onItems={setItems} />
+          <div className="action-row">
+            <button type="button" onClick={runQuote} disabled={running || items.length === 0}>
+              Run Quote
+            </button>
+            <RuntimeTimer running={running} finishedDurationMs={duration} />
+          </div>
+          <p className="disclaimer">Prices may exclude shipping and tax.</p>
+          {runId ? <p className="small">Run ID: {runId}</p> : null}
+          {error ? <p className="error">{error}</p> : null}
         </div>
-        {runId ? <p className="small">Run ID: {runId}</p> : null}
-        {error ? <p className="error">{error}</p> : null}
-      </section>
 
-      <section className="panel">
-        <QuoteResults results={results} />
+        <section className="panel">
+          <QuoteResults results={results} />
+        </section>
       </section>
     </main>
   );

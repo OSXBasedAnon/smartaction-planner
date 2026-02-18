@@ -7,6 +7,20 @@ type QuoteResultsProps = {
   results: QuoteItemResult[];
 };
 
+function normalizeDestination(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}${u.pathname}`.replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+function isSameDestination(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  return normalizeDestination(a) === normalizeDestination(b);
+}
+
 function isListingUrl(url?: string): boolean {
   if (!url) return false;
   const lower = url.toLowerCase();
@@ -66,7 +80,7 @@ export function QuoteResults({ results }: QuoteResultsProps) {
                   ) : (
                     <div className="small">n/a</div>
                   )}
-                  {match.url && match.status === "ok" && match.url !== getVendorSearchUrl(match.site, item.query) ? (
+                  {match.url && match.status === "ok" && !isSameDestination(match.url, getVendorSearchUrl(match.site, item.query)) ? (
                     <a href={match.url} target="_blank" rel="noreferrer">
                       Open result
                     </a>

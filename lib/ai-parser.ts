@@ -20,6 +20,25 @@ export type ParsedPlan = {
   source: "ai" | "fallback";
 };
 
+function applyRoutingGuardrails(items: QuoteItem[], category: Category, sitePlan: string[]): { category: Category; site_plan: string[] } {
+  const text = items.map((item) => item.query.toLowerCase()).join(" ");
+  const groceryHints = ["sugar", "stevia", "sweetener", "coffee", "tea", "snack", "flour", "rice", "food"];
+  const hasGrocerySignal = groceryHints.some((word) => text.includes(word));
+
+  if (hasGrocerySignal) {
+    const fallback = fallbackCategorize(items);
+    const filtered = sitePlan.filter((site) => !["newegg", "microcenter", "bestbuy", "bhphotovideo", "adorama"].includes(site));
+    const merged = [...filtered, ...fallback.site_plan];
+    const unique = [...new Set(merged)];
+    return {
+      category: category === "electronics" ? "restaurant" : category,
+      site_plan: unique.length > 0 ? unique : fallback.site_plan
+    };
+  }
+
+  return { category, site_plan: sitePlan };
+}
+
 export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
   const normalized = normalizeItems(items);
   if (normalized.length === 0) {
@@ -76,14 +95,20 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
     const fallback = fallbackCategorize(normalized);
     const safeItems = normalizeItems(parsed.normalized_items);
     const safeSitePlan = parsed.site_plan.filter((site) => site.trim().length > 0);
+    const guarded = applyRoutingGuardrails(
+      safeItems.length > 0 ? safeItems : normalized,
+      parsed.category,
+      safeSitePlan.length > 0 ? safeSitePlan : fallback.site_plan
+    );
     return {
       normalized_items: safeItems.length > 0 ? safeItems : normalized,
-      category: parsed.category,
-      site_plan: safeSitePlan.length > 0 ? safeSitePlan : fallback.site_plan,
+      category: guarded.category,
+      site_plan: guarded.site_plan,
       source: "ai"
     };
   } catch {
     const fallback = fallbackCategorize(normalized);
-    return { normalized_items: normalized, ...fallback, source: "fallback" };
+    const guarded = applyRoutingGuardrails(normalized, fallback.category, fallback.site_plan);
+    return { normalized_items: normalized, ...guarded, source: "fallback" };
   }
 }

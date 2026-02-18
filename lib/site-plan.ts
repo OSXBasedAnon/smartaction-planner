@@ -11,7 +11,10 @@ const sitePlans = sitePlansJson as SitePlanEntry[];
 const KEYWORD_MAP: Array<{ category: Category; terms: string[] }> = [
   { category: "electronics", terms: ["macbook", "laptop", "monitor", "ssd", "gpu", "iphone", "router"] },
   { category: "office", terms: ["paper", "staple", "toner", "printer", "notebook", "pen", "folder"] },
-  { category: "restaurant", terms: ["food", "pan", "fryer", "cutlery", "table", "napkin", "restaurant"] },
+  {
+    category: "restaurant",
+    terms: ["food", "pan", "fryer", "cutlery", "table", "napkin", "restaurant", "sugar", "stevia", "sweetener", "coffee", "tea", "snack"]
+  },
   { category: "electrical", terms: ["breaker", "wire", "conduit", "switch", "outlet", "electrical", "voltage"] }
 ];
 

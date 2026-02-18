@@ -1,0 +1,22 @@
+[
+  {
+    "category": "office",
+    "sites": ["staples", "officedepot", "quill", "amazon_business", "walmart_business"]
+  },
+  {
+    "category": "electronics",
+    "sites": ["amazon", "bestbuy", "newegg", "bhphotovideo", "walmart"]
+  },
+  {
+    "category": "restaurant",
+    "sites": ["webstaurantstore", "katom", "centralrestaurant", "therestaurantstore", "restaurantdepot"]
+  },
+  {
+    "category": "electrical",
+    "sites": ["grainger", "zoro", "homedepot", "platt", "cityelectricsupply"]
+  },
+  {
+    "category": "unknown",
+    "sites": ["amazon", "walmart", "bestbuy"]
+  }
+]

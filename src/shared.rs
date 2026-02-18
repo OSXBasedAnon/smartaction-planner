@@ -148,7 +148,37 @@ fn unescape_url(raw: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn extract_result_url(site: &str, body: &str) -> Option<String> {
+fn query_tokens(query: &str) -> Vec<String> {
+    const STOPWORDS: [&str; 20] = [
+        "the", "and", "for", "with", "from", "that", "this", "your", "you", "new", "sale", "best", "buy", "item",
+        "shop", "online", "apple", "mini", "pro", "max"
+    ];
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|t| t.to_lowercase())
+        .filter(|t| t.len() >= 3 && !STOPWORDS.contains(&t.as_str()))
+        .collect()
+}
+
+fn relevance_score(text: &str, query: &str) -> i32 {
+    let tokens = query_tokens(query);
+    if tokens.is_empty() {
+        return 0;
+    }
+    let lower = text.to_lowercase();
+    let mut score = 0;
+    for token in tokens {
+        if lower.contains(&token) {
+            score += if token.len() >= 6 { 3 } else { 2 };
+        }
+    }
+    if lower.contains("service") || lower.contains("installation") {
+        score -= 3;
+    }
+    score
+}
+
+fn extract_result_url(site: &str, body: &str, query: &str) -> Option<String> {
     match site {
         "amazon" | "amazon_business" => {
             let path = first_capture(body, r#"href=\"(/(?:gp|dp|[^"]*?/dp/)[^"]+)\""#)?;
@@ -171,8 +201,20 @@ fn extract_result_url(site: &str, body: &str) -> Option<String> {
         }
         "target" => first_capture(body, r#"href=\"(https://www\.target\.com/p/[^\"]+)\""#),
         "microcenter" => {
-            first_capture(body, r#"href=\"(/product/[0-9]+/[^\"]+)\""#)
-                .map(|path| format!("https://www.microcenter.com{}", unescape_url(&path)))
+            let re = Regex::new(r#"href=\"(/product/[0-9]+/[^\"]+)\""#).ok()?;
+            let mut best: Option<(i32, String)> = None;
+            for caps in re.captures_iter(body).take(24) {
+                let Some(path) = caps.get(1).map(|m| m.as_str()) else {
+                    continue;
+                };
+                let full = format!("https://www.microcenter.com{}", unescape_url(path));
+                let score = relevance_score(&full, query);
+                match &best {
+                    Some((best_score, _)) if *best_score >= score => {}
+                    _ => best = Some((score, full)),
+                }
+            }
+            best.and_then(|(score, url)| if score > 0 { Some(url) } else { None })
         }
         "officedepot" => {
             first_capture(body, r#"href=\"(https://www\.officedepot\.com/a/products/[^\"]+)\""#)
@@ -621,7 +663,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
         };
     }
     let price = extract_price_from_body(site, &body);
-    let result_url = extract_result_url(site, &body);
+    let result_url = extract_result_url(site, &body, query);
 
     let status = if price.is_some() { "ok" } else { "not_found" }.to_string();
 

@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import sitePlansJson from "@/config/site-plans.json";
-import { deriveIntentCluster, parseAndRoute, rerankSitePlanWithGemini } from "@/lib/ai-parser";
+import { deriveIntentCluster, expandSitePlanWithGemini, parseAndRoute, rerankSitePlanWithGemini } from "@/lib/ai-parser";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { createSupabaseServiceClient } from "@/lib/supabase-service";
 
@@ -109,6 +109,23 @@ function seededFloat(seed: string): number {
 
 function toNdjson(event: RustEvent) {
   return `${JSON.stringify(event)}\n`;
+}
+
+function parseDiscoveryDomains(message?: string): string[] {
+  if (!message || !message.startsWith("discovery_domains=")) return [];
+  return message
+    .replace("discovery_domains=", "")
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(part));
+}
+
+function domainToDiscoveredSiteId(domain: string): string {
+  return `disc_${domain.replace(/[^a-z0-9]/gi, "_").toLowerCase()}`.slice(0, 48);
+}
+
+function discoveredTemplate(domain: string): string {
+  return `https://www.google.com/search?q=site:${domain}+{q}+price`;
 }
 
 function canPersist() {
@@ -228,6 +245,19 @@ async function loadSiteCatalog(sitePlan: string[]): Promise<Map<string, SiteCata
     return new Map(data.map((row) => [row.site, row as SiteCatalogRow]));
   } catch {
     return new Map();
+  }
+}
+
+async function loadEnabledSiteUniverse(): Promise<string[]> {
+  if (!canPersist()) return [...KNOWN_SITES];
+  try {
+    const service = createSupabaseServiceClient();
+    const { data, error } = await service.from("site_catalog").select("site,enabled").eq("enabled", true);
+    if (error || !data) return [...KNOWN_SITES];
+    const sites = sanitizeSitePlan(data.map((row) => String(row.site)));
+    return sites.length > 0 ? sites : [...KNOWN_SITES];
+  } catch {
+    return [...KNOWN_SITES];
   }
 }
 
@@ -432,6 +462,33 @@ function buildSiteOverrides(sitePlan: string[], catalog: Map<string, SiteCatalog
   return out;
 }
 
+async function loadDiscoveredDomainCandidates(
+  service: ReturnType<typeof createSupabaseServiceClient> | null,
+  query: string,
+  limit = 6
+): Promise<Array<{ site: string; template: string }>> {
+  if (!service) return [];
+  const token = query.split(/\s+/).find((part) => part.trim().length >= 3)?.trim();
+  if (!token) return [];
+  try {
+    const { data, error } = await service
+      .from("site_discoveries")
+      .select("merchant_domain,created_at")
+      .ilike("query", `%${token}%`)
+      .order("created_at", { ascending: false })
+      .limit(40);
+    if (error || !data) return [];
+
+    const domains = [...new Set(data.map((row) => String(row.merchant_domain).toLowerCase().trim()))]
+      .filter((domain) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain))
+      .slice(0, limit);
+
+    return domains.map((domain) => ({ site: domainToDiscoveredSiteId(domain), template: discoveredTemplate(domain) }));
+  } catch {
+    return [];
+  }
+}
+
 function shouldExpand(itemCount: number, itemHasOk: Set<number>, totalOk: number, remainingCount: number) {
   if (remainingCount <= 0) return false;
   if (totalOk === 0) return true;
@@ -466,6 +523,11 @@ export async function POST(request: Request) {
   const banditRanked = rankWithBandit(runId, baseScores, intentStats).slice(0, 12);
   const rankedWithAi = await rerankSitePlanWithGemini(parsed.normalized_items, parsed.category, banditRanked);
   const rankedSites = sanitizeSitePlan([...rankedWithAi, ...getStaticPlan(parsed.category), ...getStaticPlan("unknown")]).slice(0, 12);
+  const siteUniverse = await loadEnabledSiteUniverse();
+  const discoveredCandidates = await loadDiscoveredDomainCandidates(service, parsed.normalized_items[0]?.query ?? "", 6);
+  const dynamicOverrides: Record<string, string> = Object.fromEntries(
+    discoveredCandidates.map((candidate) => [candidate.site, candidate.template])
+  );
 
   const probeSize = parsed.confidence >= 0.75 ? 6 : 8;
   const probeSites = rankedSites.slice(0, probeSize);
@@ -543,6 +605,25 @@ export async function POST(request: Request) {
           message: match.message ?? null,
           latency_ms: match.latency_ms ?? null
         });
+
+        if (match.site === "google_shopping") {
+          const domains = parseDiscoveryDomains(match.message);
+          if (domains.length > 0) {
+            for (const domain of domains) {
+              try {
+                await service.from("site_discoveries").insert({
+                  run_id: runId,
+                  user_id: userId,
+                  query: parsed.normalized_items[itemIndex]?.query ?? "",
+                  source: "google_shopping",
+                  merchant_domain: domain
+                });
+              } catch {
+                // Optional discovery logging.
+              }
+            }
+          }
+        }
       }
 
       async function runProbeStage(sites: string[]) {
@@ -554,7 +635,7 @@ export async function POST(request: Request) {
             items: parsed.normalized_items,
             category: parsed.category,
             site_plan: sites,
-            site_overrides: buildSiteOverrides(sites, catalog),
+            site_overrides: { ...buildSiteOverrides(sites, catalog), ...dynamicOverrides },
             options: { cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0") }
           })
         });
@@ -608,7 +689,7 @@ export async function POST(request: Request) {
             items: parsed.normalized_items,
             category: parsed.category,
             site_plan: sites,
-            site_overrides: buildSiteOverrides(sites, catalog),
+            site_overrides: { ...buildSiteOverrides(sites, catalog), ...dynamicOverrides },
             options: { cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0") }
           })
         });
@@ -646,7 +727,19 @@ export async function POST(request: Request) {
         await runProbeStage(probeSites.length > 0 ? probeSites : rankedSites.slice(0, 4));
 
         if (shouldExpand(parsed.normalized_items.length, itemHasOk, totalOk, expansionSites.length)) {
-          await runExpansionStage(expansionSites);
+          let expansionPlan = [...expansionSites];
+          if (totalOk < Math.max(2, parsed.normalized_items.length)) {
+            const additions = await expandSitePlanWithGemini(
+              parsed.normalized_items,
+              parsed.category,
+              [...probeSites, ...expansionPlan],
+              siteUniverse,
+              6
+            );
+            expansionPlan = sanitizeSitePlan([...expansionPlan, ...additions]);
+            expansionPlan = [...new Set([...expansionPlan, ...discoveredCandidates.map((candidate) => candidate.site)])];
+          }
+          await runExpansionStage(expansionPlan);
         }
 
         const durationMs = Date.now() - startedAtMs;

@@ -49,6 +49,8 @@ export function getVendorSearchUrl(site: string, query: string): string {
       return `https://www.microcenter.com/search/search_results.aspx?Ntt=${q}`;
     case "ebay":
       return `https://www.ebay.com/sch/i.html?_nkw=${q}`;
+    case "google_shopping":
+      return `https://www.google.com/search?tbm=shop&q=${q}`;
     case "ace_mart":
       return `https://www.acemart.com/search?q=${q}`;
     case "lowes":

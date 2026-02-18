@@ -224,8 +224,35 @@ fn extract_result_url(site: &str, body: &str, query: &str) -> Option<String> {
             first_capture(body, r#"href=\"(https://www\.quill\.com/[^\"]+/cbs/[^\"]+)\""#)
                 .map(|url| unescape_url(&url))
         }
+        "google_shopping" => {
+            first_capture(body, r#"href=\"(/shopping/product/[^\"]+)\""#)
+                .map(|path| format!("https://www.google.com{}", unescape_url(&path)))
+        }
         _ => None
     }
+}
+
+fn extract_google_shopping_domains(body: &str) -> Vec<String> {
+    let Some(re) = Regex::new(r#"href=\"/url\?q=https?%3A%2F%2F([^%&"]+)["&]"#).ok() else {
+        return vec![];
+    };
+    let mut out: Vec<String> = Vec::new();
+    for caps in re.captures_iter(body).take(80) {
+        let Some(raw) = caps.get(1).map(|m| m.as_str().to_lowercase()) else {
+            continue;
+        };
+        let cleaned = raw.trim_start_matches("www.").to_string();
+        if cleaned.contains("google.") || cleaned.len() < 4 {
+            continue;
+        }
+        if !out.contains(&cleaned) {
+            out.push(cleaned);
+        }
+        if out.len() >= 8 {
+            break;
+        }
+    }
+    out
 }
 
 fn extract_price_from_json_ld(body: &str) -> Option<f64> {
@@ -403,6 +430,7 @@ fn site_url(site: &str, query: &str, overrides: Option<&HashMap<String, String>>
         "adorama" => format!("https://www.adorama.com/l/?searchinfo={q}"),
         "microcenter" => format!("https://www.microcenter.com/search/search_results.aspx?Ntt={q}"),
         "ebay" => format!("https://www.ebay.com/sch/i.html?_nkw={q}"),
+        "google_shopping" => format!("https://www.google.com/search?tbm=shop&q={q}"),
         _ => format!("https://www.google.com/search?q={q}+buy")
     }
 }
@@ -665,7 +693,17 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
     let price = extract_price_from_body(site, &body);
     let result_url = extract_result_url(site, &body, query);
 
-    let status = if price.is_some() { "ok" } else { "not_found" }.to_string();
+    let discovery_domains = if site == "google_shopping" {
+        extract_google_shopping_domains(&body)
+    } else {
+        Vec::new()
+    };
+    let status = if price.is_some() || (site == "google_shopping" && !discovery_domains.is_empty()) {
+        "ok"
+    } else {
+        "not_found"
+    }
+    .to_string();
 
     let result = SiteMatch {
         site: site.to_string(),
@@ -674,7 +712,11 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
         currency: Some("USD".to_string()),
         url: result_url.or(Some(url)),
         status,
-        message: None,
+        message: if site == "google_shopping" && !discovery_domains.is_empty() {
+            Some(format!("discovery_domains={}", discovery_domains.join(",")))
+        } else {
+            None
+        },
         latency_ms: Some(start.elapsed().as_millis())
     };
 

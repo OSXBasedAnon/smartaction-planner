@@ -5,7 +5,7 @@
   },
   {
     "category": "electronics",
-    "sites": ["amazon", "bestbuy", "newegg", "bhphotovideo", "walmart", "adorama", "microcenter", "ebay"]
+    "sites": ["amazon", "bestbuy", "newegg", "bhphotovideo", "walmart", "adorama", "microcenter", "ebay", "google_shopping"]
   },
   {
     "category": "restaurant",
@@ -17,6 +17,6 @@
   },
   {
     "category": "unknown",
-    "sites": ["amazon", "target", "ebay"]
+    "sites": ["amazon", "target", "ebay", "google_shopping"]
   }
 ]

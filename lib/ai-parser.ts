@@ -186,6 +186,63 @@ export async function rerankSitePlanWithGemini(
   }
 }
 
+export async function expandSitePlanWithGemini(
+  items: QuoteItem[],
+  category: Category,
+  currentSites: string[],
+  candidatePool: string[],
+  limit = 6
+): Promise<string[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const active = sanitizePlan(currentSites);
+  const pool = sanitizePlan(candidatePool).filter((site) => !active.includes(site));
+  if (!apiKey || pool.length === 0 || limit <= 0) return [];
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: [
+                    "Return JSON only: {\"site_additions\":[\"...\"]}",
+                    "Goal: increase relevant price coverage quickly when current scrape results are sparse.",
+                    "Only choose from candidate_pool and do not invent site names.",
+                    `category=${category}`,
+                    `items=${JSON.stringify(items)}`,
+                    `current_sites=${JSON.stringify(active)}`,
+                    `candidate_pool=${JSON.stringify(pool)}`
+                  ].join("\n")
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: "application/json"
+          }
+        })
+      }
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) return [];
+
+    const parsed = JSON.parse(content) as { site_additions?: string[] };
+    const additions = sanitizePlan(parsed.site_additions ?? []).filter((site) => pool.includes(site));
+    return additions.slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
 function applyRoutingGuardrails(items: QuoteItem[], category: Category, sitePlan: string[]): { category: Category; site_plan: string[] } {
   const text = items.map((item) => item.query.toLowerCase()).join(" ");
   const groceryHints = ["sugar", "stevia", "sweetener", "coffee", "tea", "snack", "flour", "rice", "food"];

@@ -128,6 +128,13 @@ function discoveredTemplate(domain: string): string {
   return `https://www.google.com/search?q=site:${domain}+{q}+price`;
 }
 
+function buildDiscoveredCandidatesFromDomains(domains: string[], limit = 6): Array<{ site: string; template: string }> {
+  const unique = [...new Set(domains.map((d) => d.toLowerCase().trim()))]
+    .filter((domain) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain))
+    .slice(0, limit);
+  return unique.map((domain) => ({ site: domainToDiscoveredSiteId(domain), template: discoveredTemplate(domain) }));
+}
+
 function canPersist() {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
 }
@@ -493,7 +500,9 @@ function shouldExpand(itemCount: number, itemHasOk: Set<number>, totalOk: number
   if (remainingCount <= 0) return false;
   if (totalOk === 0) return true;
   if (itemHasOk.size < itemCount) return true;
-  return totalOk < Math.min(itemCount * 2, 4);
+  // Keep expanding until each item has a deeper bench of options.
+  const minTarget = Math.max(itemCount * 4, 5);
+  return totalOk < minTarget;
 }
 
 export async function POST(request: Request) {
@@ -525,12 +534,15 @@ export async function POST(request: Request) {
   const rankedSites = sanitizeSitePlan([...rankedWithAi, ...getStaticPlan(parsed.category), ...getStaticPlan("unknown")]).slice(0, 12);
   const siteUniverse = await loadEnabledSiteUniverse();
   const discoveredCandidates = await loadDiscoveredDomainCandidates(service, parsed.normalized_items[0]?.query ?? "", 6);
-  const dynamicOverrides: Record<string, string> = Object.fromEntries(
+  const seedDynamicOverrides: Record<string, string> = Object.fromEntries(
     discoveredCandidates.map((candidate) => [candidate.site, candidate.template])
   );
 
   const probeSize = parsed.confidence >= 0.75 ? 6 : 8;
-  const probeSites = rankedSites.slice(0, probeSize);
+  let probeSites = rankedSites.slice(0, probeSize);
+  if (rankedSites.includes("google_shopping") && !probeSites.includes("google_shopping")) {
+    probeSites = [...probeSites.slice(0, Math.max(0, probeSize - 1)), "google_shopping"];
+  }
   const expansionSites = rankedSites.slice(probeSize);
 
   let userId: string | null = null;
@@ -566,6 +578,8 @@ export async function POST(request: Request) {
       const itemHasOk = new Set<number>();
       let totalOk = 0;
       const siteStats = new Map<string, SiteStats>();
+      const observedDiscoveryDomains = new Set<string>();
+      let dynamicOverrides: Record<string, string> = { ...seedDynamicOverrides };
 
       function addSiteStat(match: SiteMatch) {
         const current = siteStats.get(match.site) ?? {
@@ -589,6 +603,17 @@ export async function POST(request: Request) {
           current.latencyCount += 1;
         }
         siteStats.set(match.site, current);
+      }
+
+      function absorbDiscovery(match: SiteMatch) {
+        if (match.site !== "google_shopping") return;
+        const domains = parseDiscoveryDomains(match.message);
+        if (domains.length === 0) return;
+        for (const domain of domains) {
+          observedDiscoveryDomains.add(domain);
+        }
+        const dynamic = buildDiscoveredCandidatesFromDomains([...observedDiscoveryDomains], 8);
+        dynamicOverrides = { ...dynamicOverrides, ...Object.fromEntries(dynamic.map((d) => [d.site, d.template])) };
       }
 
       async function persistMatch(itemIndex: number, match: SiteMatch) {
@@ -666,6 +691,7 @@ export async function POST(request: Request) {
 
             const event = JSON.parse(line) as RustEvent;
             if (event.type === "match") {
+              absorbDiscovery(event.match);
               if (event.match.status === "ok") {
                 totalOk += 1;
                 itemHasOk.add(event.item_index);
@@ -707,6 +733,7 @@ export async function POST(request: Request) {
         for (let itemIndex = 0; itemIndex < json.items.length; itemIndex++) {
           const item = json.items[itemIndex];
           for (const match of item.matches as SiteMatch[]) {
+            absorbDiscovery(match);
             if (match.status === "ok") {
               totalOk += 1;
               itemHasOk.add(itemIndex);
@@ -737,7 +764,15 @@ export async function POST(request: Request) {
               6
             );
             expansionPlan = sanitizeSitePlan([...expansionPlan, ...additions]);
-            expansionPlan = [...new Set([...expansionPlan, ...discoveredCandidates.map((candidate) => candidate.site)])];
+            const runtimeDiscovered = buildDiscoveredCandidatesFromDomains([...observedDiscoveryDomains], 8);
+            dynamicOverrides = { ...dynamicOverrides, ...Object.fromEntries(runtimeDiscovered.map((d) => [d.site, d.template])) };
+            expansionPlan = [
+              ...new Set([
+                ...expansionPlan,
+                ...discoveredCandidates.map((candidate) => candidate.site),
+                ...runtimeDiscovered.map((candidate) => candidate.site)
+              ])
+            ];
           }
           await runExpansionStage(expansionPlan);
         }

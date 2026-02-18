@@ -233,23 +233,37 @@ fn extract_result_url(site: &str, body: &str, query: &str) -> Option<String> {
 }
 
 fn extract_google_shopping_domains(body: &str) -> Vec<String> {
-    let Some(re) = Regex::new(r#"href=\"/url\?q=https?%3A%2F%2F([^%&"]+)["&]"#).ok() else {
-        return vec![];
-    };
     let mut out: Vec<String> = Vec::new();
-    for caps in re.captures_iter(body).take(80) {
-        let Some(raw) = caps.get(1).map(|m| m.as_str().to_lowercase()) else {
+
+    let patterns = [
+        r#"href=\"/url\?q=https?%3A%2F%2F([^%&"]+)["&]"#,
+        r#"https?://(?:www\.)?([a-z0-9.-]+\.[a-z]{2,})(?:/|\\u002f)"#,
+        r#"https?%3A%2F%2F(?:www\.)?([a-z0-9.-]+\.[a-z]{2,})(?:%2F|%2f)"#
+    ];
+
+    for pattern in patterns {
+        let Some(re) = Regex::new(pattern).ok() else {
             continue;
         };
-        let cleaned = raw.trim_start_matches("www.").to_string();
-        if cleaned.contains("google.") || cleaned.len() < 4 {
-            continue;
-        }
-        if !out.contains(&cleaned) {
-            out.push(cleaned);
-        }
-        if out.len() >= 8 {
-            break;
+        for caps in re.captures_iter(body).take(120) {
+            let Some(raw) = caps.get(1).map(|m| m.as_str().to_lowercase()) else {
+                continue;
+            };
+            let cleaned = raw.trim_start_matches("www.").trim().to_string();
+            if cleaned.contains("google.")
+                || cleaned.contains("gstatic.")
+                || cleaned.contains("youtube.")
+                || cleaned.contains("schema.org")
+                || cleaned.len() < 4
+            {
+                continue;
+            }
+            if !out.contains(&cleaned) {
+                out.push(cleaned);
+            }
+            if out.len() >= 12 {
+                return out;
+            }
         }
     }
     out

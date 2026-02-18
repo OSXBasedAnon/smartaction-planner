@@ -10,13 +10,19 @@ const aiResponseSchema = z.object({
     })
   ),
   category: z.enum(["electronics", "office", "restaurant", "electrical", "unknown"]),
-  site_plan: z.array(z.string().min(1))
+  site_plan: z.array(z.string().min(1)),
+  category_candidates: z.array(z.string()).optional(),
+  query_variants: z.array(z.string()).optional(),
+  confidence: z.number().min(0).max(1).optional()
 });
 
 export type ParsedPlan = {
   normalized_items: QuoteItem[];
   category: Category;
   site_plan: string[];
+  category_candidates: Category[];
+  query_variants: string[];
+  confidence: number;
   source: "ai" | "fallback";
 };
 
@@ -51,6 +57,13 @@ function ensurePlanCoverage(items: QuoteItem[], category: Category, sitePlan: st
   return unique.slice(0, Math.max(4, Math.min(8, unique.length)));
 }
 
+function toCategoryCandidates(raw: string[] | undefined, fallback: Category): Category[] {
+  const valid = new Set<Category>(["electronics", "office", "restaurant", "electrical", "unknown"]);
+  const values = (raw ?? []).filter((v): v is Category => valid.has(v as Category));
+  const merged = [fallback, ...values];
+  return [...new Set(merged)];
+}
+
 export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
   const normalized = normalizeItems(items);
   if (normalized.length === 0) {
@@ -58,6 +71,9 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
       normalized_items: [],
       category: "unknown",
       site_plan: fallbackCategorize([]).site_plan,
+      category_candidates: ["unknown"],
+      query_variants: [],
+      confidence: 0.2,
       source: "fallback"
     };
   }
@@ -65,15 +81,24 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     const fallback = fallbackCategorize(normalized);
-    return { normalized_items: normalized, ...fallback, source: "fallback" };
+    return {
+      normalized_items: normalized,
+      ...fallback,
+      category_candidates: [fallback.category],
+      query_variants: normalized.map((item) => item.query),
+      confidence: 0.35,
+      source: "fallback"
+    };
   }
 
   try {
     const prompt = [
       "You are a strict JSON API. Classify procurement items.",
       "Return only JSON in this shape:",
-      '{"normalized_items":[{"query":"...","qty":1}],"category":"electronics|office|restaurant|electrical|unknown","site_plan":["..."]}',
-      "Use concise normalized queries."
+      '{"normalized_items":[{"query":"...","qty":1}],"category":"electronics|office|restaurant|electrical|unknown","category_candidates":["..."],"query_variants":["..."],"confidence":0.0,"site_plan":["..."]}',
+      "Use concise normalized queries.",
+      "confidence is 0-1 where 1 is very certain.",
+      "Provide at least 3 site_plan entries when possible."
     ].join("\n");
 
     const response = await fetch(
@@ -117,12 +142,23 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
       normalized_items: safeItems.length > 0 ? safeItems : normalized,
       category: guarded.category,
       site_plan: covered,
+      category_candidates: toCategoryCandidates(parsed.category_candidates, guarded.category),
+      query_variants: (parsed.query_variants ?? []).filter((q) => q.trim().length > 0).slice(0, 8),
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.7,
       source: "ai"
     };
   } catch {
     const fallback = fallbackCategorize(normalized);
     const guarded = applyRoutingGuardrails(normalized, fallback.category, fallback.site_plan);
     const covered = ensurePlanCoverage(normalized, guarded.category, guarded.site_plan);
-    return { normalized_items: normalized, category: guarded.category, site_plan: covered, source: "fallback" };
+    return {
+      normalized_items: normalized,
+      category: guarded.category,
+      site_plan: covered,
+      category_candidates: [guarded.category],
+      query_variants: normalized.map((item) => item.query),
+      confidence: 0.4,
+      source: "fallback"
+    };
   }
 }

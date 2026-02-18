@@ -33,6 +33,18 @@ type RustEvent =
   | { type: "done"; duration_ms: number }
   | { type: "error"; message: string };
 
+type SiteCatalogRow = {
+  site: string;
+  category?: string;
+  search_url_template?: string;
+  enabled?: boolean;
+  priority?: number;
+  reliability_score?: number;
+  avg_latency_ms?: number;
+  js_heavy?: boolean;
+  block_rate?: number;
+};
+
 function toNdjson(event: RustEvent) {
   return `${JSON.stringify(event)}\n`;
 }
@@ -46,12 +58,7 @@ async function resolveSitePlanFromSupabase(category: string, fallback: string[])
 
   try {
     const service = createSupabaseServiceClient();
-    const { data, error } = await service
-      .from("site_plans")
-      .select("sites")
-      .eq("category", category)
-      .maybeSingle();
-
+    const { data, error } = await service.from("site_plans").select("sites").eq("category", category).maybeSingle();
     if (error || !data?.sites || !Array.isArray(data.sites)) return fallback;
     const sites = data.sites.filter((s: unknown): s is string => typeof s === "string" && s.trim().length > 0);
     return sites.length > 0 ? sites : fallback;
@@ -60,49 +67,86 @@ async function resolveSitePlanFromSupabase(category: string, fallback: string[])
   }
 }
 
-async function resolveSiteOverridesFromSupabase(sitePlan: string[]): Promise<Record<string, string>> {
-  if (!canPersist() || sitePlan.length === 0) return {};
+async function resolveExpandedBasePlan(primaryCategory: string, categoryCandidates: string[], aiPlan: string[]): Promise<string[]> {
+  const plans: string[][] = [aiPlan];
+  plans.push(await resolveSitePlanFromSupabase(primaryCategory, aiPlan));
+
+  for (const candidate of categoryCandidates.slice(0, 3)) {
+    plans.push(await resolveSitePlanFromSupabase(candidate, []));
+  }
+
+  plans.push(await resolveSitePlanFromSupabase("unknown", []));
+
+  return [...new Set(plans.flat().filter((site) => site.trim().length > 0))];
+}
+
+async function loadSiteCatalog(sitePlan: string[]): Promise<Map<string, SiteCatalogRow>> {
+  if (!canPersist() || sitePlan.length === 0) return new Map();
+
+  const service = createSupabaseServiceClient();
 
   try {
-    const service = createSupabaseServiceClient();
     const { data, error } = await service
       .from("site_catalog")
-      .select("site, search_url_template")
-      .in("site", sitePlan)
-      .eq("enabled", true);
+      .select("site,category,search_url_template,enabled,priority,reliability_score,avg_latency_ms,js_heavy,block_rate")
+      .in("site", sitePlan);
 
-    if (error || !data) return {};
-
-    const overrides: Record<string, string> = {};
-    for (const row of data) {
-      if (typeof row.site === "string" && typeof row.search_url_template === "string" && row.search_url_template.includes("{q}")) {
-        overrides[row.site] = row.search_url_template;
-      }
+    if (!error && data) {
+      return new Map(data.map((row) => [row.site, row as SiteCatalogRow]));
     }
-    return overrides;
   } catch {
-    return {};
+    // Fall through to lightweight query.
+  }
+
+  try {
+    const { data, error } = await service.from("site_catalog").select("site,category,search_url_template,enabled,priority").in("site", sitePlan);
+    if (error || !data) return new Map();
+    return new Map(data.map((row) => [row.site, row as SiteCatalogRow]));
+  } catch {
+    return new Map();
   }
 }
 
-async function filterEnabledSites(sitePlan: string[]): Promise<string[]> {
-  if (!canPersist() || sitePlan.length === 0) return sitePlan;
-  try {
-    const service = createSupabaseServiceClient();
-    const { data, error } = await service.from("site_catalog").select("site, enabled").in("site", sitePlan);
-    if (error || !data) return sitePlan;
-    const enabledBySite = new Map<string, boolean>();
-    for (const row of data) {
-      if (typeof row.site === "string") {
-        enabledBySite.set(row.site, row.enabled !== false);
+function scoreSites(sitePlan: string[], catalog: Map<string, SiteCatalogRow>) {
+  const scored = sitePlan
+    .map((site) => {
+      const row = catalog.get(site);
+      if (row?.enabled === false) {
+        return { site, score: Number.NEGATIVE_INFINITY };
       }
+
+      const priority = row?.priority ?? 100;
+      const reliability = row?.reliability_score ?? 0.62;
+      const latency = row?.avg_latency_ms ?? 2200;
+      const blockRate = row?.block_rate ?? 0.35;
+      const jsPenalty = row?.js_heavy ? 180 : 0;
+
+      const score = 1000 - priority * 3 + reliability * 420 - blockRate * 240 - latency / 45 - jsPenalty;
+      return { site, score };
+    })
+    .filter((row) => Number.isFinite(row.score) && row.score > -1e9)
+    .sort((a, b) => b.score - a.score)
+    .map((row) => row.site);
+
+  return scored.length > 0 ? scored : sitePlan;
+}
+
+function buildSiteOverrides(sitePlan: string[], catalog: Map<string, SiteCatalogRow>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const site of sitePlan) {
+    const template = catalog.get(site)?.search_url_template;
+    if (typeof template === "string" && template.includes("{q}")) {
+      out[site] = template;
     }
-    // Keep unknown sites; only remove explicitly disabled ones.
-    const filtered = sitePlan.filter((site) => enabledBySite.get(site) !== false);
-    return filtered.length > 0 ? filtered : sitePlan;
-  } catch {
-    return sitePlan;
   }
+  return out;
+}
+
+function shouldExpand(itemCount: number, itemHasOk: Set<number>, totalOk: number, remainingCount: number) {
+  if (remainingCount <= 0) return false;
+  if (totalOk === 0) return true;
+  if (itemHasOk.size < itemCount) return true;
+  return totalOk < Math.min(itemCount * 2, 4);
 }
 
 export async function POST(request: Request) {
@@ -114,14 +158,21 @@ export async function POST(request: Request) {
   }
 
   const runId = randomUUID();
-  const normalized = await parseAndRoute(parsedInput.data.items);
-  const plannedSitePlan = await resolveSitePlanFromSupabase(normalized.category, normalized.site_plan);
-  const resolvedSitePlan = await filterEnabledSites(plannedSitePlan);
-  const siteOverrides = await resolveSiteOverridesFromSupabase(resolvedSitePlan);
+  const parsed = await parseAndRoute(parsedInput.data.items);
 
-  if (normalized.normalized_items.length === 0) {
+  if (parsed.normalized_items.length === 0) {
     return NextResponse.json({ error: "No valid items in request" }, { status: 400 });
   }
+
+  const basePlan = await resolveExpandedBasePlan(parsed.category, parsed.category_candidates, parsed.site_plan);
+  const catalog = await loadSiteCatalog(basePlan);
+  const rankedSites = scoreSites(basePlan, catalog).slice(0, 12);
+
+  const probeSize = parsed.confidence >= 0.75 ? 4 : 6;
+  const probeSites = rankedSites.slice(0, probeSize);
+  const expansionSites = rankedSites.slice(probeSize);
+
+  const siteOverrides = buildSiteOverrides(rankedSites, catalog);
 
   let userId: string | null = null;
   let service: ReturnType<typeof createSupabaseServiceClient> | null = null;
@@ -143,98 +194,59 @@ export async function POST(request: Request) {
       user_id: userId,
       input_type: parsedInput.data.input_type,
       raw_input: JSON.stringify(parsedInput.data.items),
-      category: normalized.category,
-      site_plan: resolvedSitePlan,
+      category: parsed.category,
+      site_plan: rankedSites,
       status: "running"
     });
   }
 
   const origin = process.env.APP_BASE_URL ?? new URL(request.url).origin;
-  const payload = {
-    run_id: runId,
-    items: normalized.normalized_items,
-    category: normalized.category,
-    site_plan: resolvedSitePlan,
-    site_overrides: siteOverrides,
-    options: {
-      cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0")
-    }
-  };
-
-  const streamResponse = await fetch(`${origin}/api/quote_stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-
-  if (!streamResponse.ok || !streamResponse.body) {
-    const quoteResponse = await fetch(`${origin}/api/quote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    if (!quoteResponse.ok) {
-      if (service && userId) {
-        await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", userId);
-      }
-      return NextResponse.json({ error: "Quote failed", stream_status: streamResponse.status, quote_status: quoteResponse.status }, { status: 502 });
-    }
-
-    const quoteJson = await quoteResponse.json();
-    const lines: string[] = [];
-    lines.push(toNdjson({ type: "started", run_id: runId, started_at: new Date().toISOString() }));
-
-    for (let i = 0; i < quoteJson.items.length; i++) {
-      const item = quoteJson.items[i];
-      for (const match of item.matches) {
-        const event: RustEvent = { type: "match", item_index: i, query: item.query, match };
-        lines.push(toNdjson(event));
-
-        if (service && userId) {
-          await service.from("quote_results").insert({
-            run_id: runId,
-            item_index: i,
-            site: match.site,
-            title: match.title ?? null,
-            price: typeof match.price === "number" ? match.price : null,
-            currency: match.currency ?? "USD",
-            url: match.url ?? null,
-            status: match.status,
-            message: match.message ?? null,
-            latency_ms: match.latency_ms ?? null
-          });
-        }
-      }
-
-      lines.push(toNdjson({ type: "item_done", item_index: i, query: item.query, best: item.best }));
-    }
-
-    lines.push(toNdjson({ type: "done", duration_ms: quoteJson.duration_ms ?? 0 }));
-
-    if (service && userId) {
-      await service.from("quote_runs").update({ status: "done", duration_ms: quoteJson.duration_ms ?? 0 }).eq("id", runId).eq("user_id", userId);
-    }
-
-    return new Response(lines.join(""), {
-      headers: {
-        "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Cache-Control": "no-cache"
-      }
-    });
-  }
-
+  const startedAtMs = Date.now();
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      controller.enqueue(encoder.encode(toNdjson({ type: "started", run_id: runId, started_at: new Date().toISOString() })));
+      const itemHasOk = new Set<number>();
+      let totalOk = 0;
 
-      const reader = streamResponse.body!.getReader();
-      let buffer = "";
+      async function persistMatch(itemIndex: number, match: SiteMatch) {
+        if (!service || !userId) return;
+        await service.from("quote_results").insert({
+          run_id: runId,
+          item_index: itemIndex,
+          site: match.site,
+          title: match.title ?? null,
+          price: typeof match.price === "number" ? match.price : null,
+          currency: match.currency ?? "USD",
+          url: match.url ?? null,
+          status: match.status,
+          message: match.message ?? null,
+          latency_ms: match.latency_ms ?? null
+        });
+      }
 
-      try {
+      async function runProbeStage(sites: string[]) {
+        const response = await fetch(`${origin}/api/quote_stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_id: runId,
+            items: parsed.normalized_items,
+            category: parsed.category,
+            site_plan: sites,
+            site_overrides: buildSiteOverrides(sites, catalog),
+            options: { cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0") }
+          })
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`probe_stage_failed_${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -244,41 +256,77 @@ export async function POST(request: Request) {
           buffer = events.pop() ?? "";
 
           for (const rawEvent of events) {
-            const dataLine = rawEvent
+            const line = rawEvent
               .split("\n")
-              .find((line) => line.startsWith("data: "))
+              .find((l) => l.startsWith("data: "))
               ?.replace("data: ", "")
               .trim();
+            if (!line) continue;
 
-            if (!dataLine) continue;
-            const parsed = JSON.parse(dataLine) as RustEvent;
-
-            if (parsed.type === "match" && service && userId) {
-              await service.from("quote_results").insert({
-                run_id: runId,
-                item_index: parsed.item_index,
-                site: parsed.match.site,
-                title: parsed.match.title ?? null,
-                price: typeof parsed.match.price === "number" ? parsed.match.price : null,
-                currency: parsed.match.currency ?? "USD",
-                url: parsed.match.url ?? null,
-                status: parsed.match.status,
-                message: parsed.match.message ?? null,
-                latency_ms: parsed.match.latency_ms ?? null
-              });
+            const event = JSON.parse(line) as RustEvent;
+            if (event.type === "match") {
+              if (event.match.status === "ok") {
+                totalOk += 1;
+                itemHasOk.add(event.item_index);
+              }
+              await persistMatch(event.item_index, event.match);
+              controller.enqueue(encoder.encode(toNdjson(event)));
+            } else if (event.type === "item_done") {
+              controller.enqueue(encoder.encode(toNdjson(event)));
             }
-
-            if (parsed.type === "done" && service && userId) {
-              await service.from("quote_runs").update({ status: "done", duration_ms: parsed.duration_ms }).eq("id", runId).eq("user_id", userId);
-            }
-
-            if (parsed.type === "error" && service && userId) {
-              await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", userId);
-            }
-
-            controller.enqueue(encoder.encode(toNdjson(parsed)));
           }
         }
+      }
+
+      async function runExpansionStage(sites: string[]) {
+        const response = await fetch(`${origin}/api/quote`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_id: runId,
+            items: parsed.normalized_items,
+            category: parsed.category,
+            site_plan: sites,
+            site_overrides: buildSiteOverrides(sites, catalog),
+            options: { cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0") }
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`expansion_stage_failed_${response.status}`);
+        }
+
+        const json = await response.json();
+        for (let itemIndex = 0; itemIndex < json.items.length; itemIndex++) {
+          const item = json.items[itemIndex];
+          for (const match of item.matches as SiteMatch[]) {
+            if (match.status === "ok") {
+              totalOk += 1;
+              itemHasOk.add(itemIndex);
+            }
+            await persistMatch(itemIndex, match);
+            controller.enqueue(encoder.encode(toNdjson({ type: "match", item_index: itemIndex, query: item.query, match })));
+          }
+          controller.enqueue(
+            encoder.encode(toNdjson({ type: "item_done", item_index: itemIndex, query: item.query, best: item.best }))
+          );
+        }
+      }
+
+      try {
+        controller.enqueue(encoder.encode(toNdjson({ type: "started", run_id: runId, started_at: new Date(startedAtMs).toISOString() })));
+
+        await runProbeStage(probeSites.length > 0 ? probeSites : rankedSites.slice(0, 4));
+
+        if (shouldExpand(parsed.normalized_items.length, itemHasOk, totalOk, expansionSites.length)) {
+          await runExpansionStage(expansionSites);
+        }
+
+        const durationMs = Date.now() - startedAtMs;
+        if (service && userId) {
+          await service.from("quote_runs").update({ status: "done", duration_ms: durationMs }).eq("id", runId).eq("user_id", userId);
+        }
+        controller.enqueue(encoder.encode(toNdjson({ type: "done", duration_ms: durationMs })));
       } catch (error) {
         if (service && userId) {
           await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", userId);
@@ -287,7 +335,7 @@ export async function POST(request: Request) {
           encoder.encode(
             toNdjson({
               type: "error",
-              message: error instanceof Error ? error.message : "Stream parsing failed"
+              message: error instanceof Error ? error.message : "run_quote_orchestration_failed"
             })
           )
         );

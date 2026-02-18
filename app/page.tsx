@@ -203,13 +203,16 @@ export default function LandingPage() {
           <RuntimeTimer running={running} finishedDurationMs={duration} />
         </div>
 
-        <p className="disclaimer">Prices may exclude shipping and tax.</p>
-        {runId ? <p className="small">Run ID: {runId}</p> : null}
         {error ? <p className="error">{error}</p> : null}
       </section>
 
       <section className="container results-flat" style={{ marginTop: 14 }}>
         <QuoteResults results={results} />
+      </section>
+
+      <section className="container meta-strip">
+        <p className="small">Pricing may exclude shipping/tax. Site availability can be partial.</p>
+        {runId ? <p className="small">Run ID: {runId}</p> : null}
       </section>
     </main>
   );

@@ -161,6 +161,14 @@ button:disabled {
   text-align: center;
 }
 
+.meta-strip {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  opacity: 0.8;
+  padding-top: 0;
+}
+
 .results-flat .panel {
   border: none;
   background: rgba(16, 24, 37, 0.55);
@@ -253,5 +261,11 @@ button:disabled {
   .search-btn,
   .attach-btn {
     width: 100%;
+  }
+
+  .meta-strip {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
   }
 }

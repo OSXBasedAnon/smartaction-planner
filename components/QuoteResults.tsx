@@ -20,7 +20,6 @@ export function QuoteResults({ results }: QuoteResultsProps) {
 
   return (
     <div className="grid">
-      <p className="small">Pricing may exclude shipping/tax. Site availability can be partial.</p>
       {results.map((item) => (
         <div key={item.query} className="panel result-card">
           <h3>{item.query}</h3>

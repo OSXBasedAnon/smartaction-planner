@@ -66,7 +66,7 @@ export function QuoteResults({ results }: QuoteResultsProps) {
                   ) : (
                     <div className="small">n/a</div>
                   )}
-                  {match.url && match.status === "ok" ? (
+                  {match.url && match.status === "ok" && match.url !== getVendorSearchUrl(match.site, item.query) ? (
                     <a href={match.url} target="_blank" rel="noreferrer">
                       Open result
                     </a>

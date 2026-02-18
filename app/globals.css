@@ -125,6 +125,17 @@ a {
   height: 42px;
 }
 
+.beta-badge {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: #ff9f43;
+  color: #2d1400;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 700;
+}
+
 .search-shell {
   max-width: 860px;
   margin: 0 auto;

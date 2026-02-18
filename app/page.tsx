@@ -221,6 +221,7 @@ export default function LandingPage() {
         <div className="brand-row">
           <h1>SupplyFlare</h1>
           <img src="/logo.svg" alt="SupplyFlare logo" className="brand-logo" />
+          <span className="beta-badge">beta</span>
         </div>
 
         <form

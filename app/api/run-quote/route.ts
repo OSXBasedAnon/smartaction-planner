@@ -85,6 +85,20 @@ async function resolveSiteOverridesFromSupabase(sitePlan: string[]): Promise<Rec
   }
 }
 
+async function filterEnabledSites(sitePlan: string[]): Promise<string[]> {
+  if (!canPersist() || sitePlan.length === 0) return sitePlan;
+  try {
+    const service = createSupabaseServiceClient();
+    const { data, error } = await service.from("site_catalog").select("site").in("site", sitePlan).eq("enabled", true);
+    if (error || !data) return sitePlan;
+    const enabled = new Set(data.map((row) => row.site).filter((v): v is string => typeof v === "string"));
+    const filtered = sitePlan.filter((site) => enabled.has(site));
+    return filtered.length > 0 ? filtered : sitePlan;
+  } catch {
+    return sitePlan;
+  }
+}
+
 export async function POST(request: Request) {
   const rawBody = await request.json();
   const parsedInput = inputSchema.safeParse(rawBody);
@@ -95,7 +109,8 @@ export async function POST(request: Request) {
 
   const runId = randomUUID();
   const normalized = await parseAndRoute(parsedInput.data.items);
-  const resolvedSitePlan = await resolveSitePlanFromSupabase(normalized.category, normalized.site_plan);
+  const plannedSitePlan = await resolveSitePlanFromSupabase(normalized.category, normalized.site_plan);
+  const resolvedSitePlan = await filterEnabledSites(plannedSitePlan);
   const siteOverrides = await resolveSiteOverridesFromSupabase(resolvedSitePlan);
 
   if (normalized.normalized_items.length === 0) {

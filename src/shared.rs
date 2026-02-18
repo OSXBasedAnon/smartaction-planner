@@ -119,7 +119,32 @@ async fn read_body_limited(response: reqwest::Response, max_bytes: usize) -> Res
     } else {
         &bytes
     };
-    String::from_utf8(slice.to_vec()).map_err(|e| e.to_string())
+    Ok(String::from_utf8_lossy(slice).to_string())
+}
+
+fn first_capture(body: &str, pattern: &str) -> Option<String> {
+    let re = Regex::new(pattern).ok()?;
+    re.captures(body)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+}
+
+fn extract_result_url(site: &str, body: &str) -> Option<String> {
+    match site {
+        "amazon" | "amazon_business" => {
+            let path = first_capture(body, r#"href=\"(/(?:gp|dp|[^"]*?/dp/)[^"]+)\""#)?;
+            Some(format!("https://www.amazon.com{}", path.replace("\\u0026", "&")))
+        }
+        "newegg" => first_capture(body, r#"href=\"(https://www\.newegg\.com/p/[^\"]+)\""#),
+        "bestbuy" => {
+            let path = first_capture(body, r#"href=\"(/site/[^"]+\.p\?[^"]*)\""#)
+                .or_else(|| first_capture(body, r#"href=\"(/site/[^"]+\.p)\""#))?;
+            Some(format!("https://www.bestbuy.com{}", path.replace("\\u0026", "&")))
+        }
+        "ebay" => first_capture(body, r#"href=\"(https://www\.ebay\.com/itm/[^\"]+)\""#),
+        "target" => first_capture(body, r#"href=\"(https://www\.target\.com/p/[^\"]+)\""#),
+        _ => None
+    }
 }
 
 fn extract_price_from_json_ld(body: &str) -> Option<f64> {
@@ -527,6 +552,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
 
     let title = extract_title(&body);
     let price = extract_price_from_body(site, &body);
+    let result_url = extract_result_url(site, &body);
 
     let status = if price.is_some() { "ok" } else { "not_found" }.to_string();
 
@@ -535,7 +561,7 @@ pub async fn scrape_site(site: &str, query: &str, ttl: u64, overrides: Option<&H
         title,
         price,
         currency: Some("USD".to_string()),
-        url: Some(url),
+        url: result_url.or(Some(url)),
         status,
         message: None,
         latency_ms: Some(start.elapsed().as_millis())

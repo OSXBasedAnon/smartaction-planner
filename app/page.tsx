@@ -1,11 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { CSVUploader } from "@/components/CSVUploader";
+import { DragEvent, useMemo, useState } from "react";
 import { QuoteResults } from "@/components/QuoteResults";
 import { RuntimeTimer } from "@/components/RuntimeTimer";
-import { SearchInput } from "@/components/SearchInput";
 import type { QuoteItemResult, SiteMatch } from "@/lib/types";
 
 type StreamEvent =
@@ -17,9 +15,8 @@ type StreamEvent =
 
 function mergeMatch(results: QuoteItemResult[], itemIndex: number, query: string, match: SiteMatch): QuoteItemResult[] {
   const next = [...results];
-  while (next.length <= itemIndex) {
-    next.push({ query, matches: [] });
-  }
+  while (next.length <= itemIndex) next.push({ query, matches: [] });
+
   const current = next[itemIndex];
   current.query = query;
   current.matches = [...current.matches, match];
@@ -35,18 +32,56 @@ function mergeMatch(results: QuoteItemResult[], itemIndex: number, query: string
   return next;
 }
 
+function parseCsvLike(text: string): Array<{ query: string; qty: number }> {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [query, qty] = line.split(",").map((part) => part.trim());
+      return { query, qty: Number.isFinite(Number(qty)) && Number(qty) > 0 ? Number(qty) : 1 };
+    })
+    .filter((item) => item.query.length > 0);
+}
+
+function inferInputType(items: Array<{ query: string; qty: number }>): "text" | "sku" | "csv" {
+  if (items.length > 1) return "csv";
+  const q = items[0]?.query ?? "";
+  const skuLike = /^[a-zA-Z0-9\-_]{4,}$/.test(q) && !q.includes(" ");
+  return skuLike ? "sku" : "text";
+}
+
 export default function LandingPage() {
-  const [items, setItems] = useState<Array<{ query: string; qty: number }>>([]);
+  const [rawInput, setRawInput] = useState("");
   const [results, setResults] = useState<QuoteItemResult[]>([]);
   const [running, setRunning] = useState(false);
   const [duration, setDuration] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
 
-  const inputType = useMemo(() => (items.length > 1 ? "csv" : "text"), [items.length]);
+  const items = useMemo(() => parseCsvLike(rawInput), [rawInput]);
+  const inputType = useMemo(() => inferInputType(items), [items]);
+
+  async function applyDroppedFile(file: File) {
+    const text = await file.text();
+    const parsed = parseCsvLike(text);
+    setRawInput(parsed.map((item) => `${item.query},${item.qty}`).join("\n"));
+  }
+
+  async function onDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("Please drop a CSV file.");
+      return;
+    }
+    await applyDroppedFile(file);
+  }
 
   async function runQuote() {
     if (items.length === 0) return;
+
     setRunning(true);
     setError(null);
     setResults([]);
@@ -82,15 +117,11 @@ export default function LandingPage() {
           if (line.length > 0) {
             const event: StreamEvent = JSON.parse(line);
             if (event.type === "started") setRunId(event.run_id);
-            if (event.type === "match") {
-              setResults((prev) => mergeMatch(prev, event.item_index, event.query, event.match));
-            }
+            if (event.type === "match") setResults((prev) => mergeMatch(prev, event.item_index, event.query, event.match));
             if (event.type === "item_done" && event.best) {
               setResults((prev) => {
                 const next = [...prev];
-                while (next.length <= event.item_index) {
-                  next.push({ query: event.query, matches: [] });
-                }
+                while (next.length <= event.item_index) next.push({ query: event.query, matches: [] });
                 next[event.item_index].best = event.best;
                 return next;
               });
@@ -110,43 +141,63 @@ export default function LandingPage() {
   }
 
   return (
-    <main className="container grid" style={{ gap: 16 }}>
-      <header className="topbar">
-        <div className="hero">
-          <h1>SupplyFlare</h1>
-          <p className="small">High-speed quote discovery across multiple vendors</p>
-        </div>
-        <div className="nav-links">
-          <Link href="/app" className="nav-pill">
-            Dashboard
-          </Link>
-          <Link href="/login" className="nav-pill">
-            Login
-          </Link>
-          <Link href="/signup" className="nav-pill">
-            Sign up
-          </Link>
+    <main className="home-wrap">
+      <header className="home-nav">
+        <div className="row" style={{ gap: 10 }}>
+          <Link href="/app">Dashboard</Link>
+          <Link href="/login">Login</Link>
+          <Link href="/signup">Sign up</Link>
         </div>
       </header>
 
-      <section className="quote-layout">
-        <div className="panel control-block">
-          <SearchInput onItems={setItems} />
-          <CSVUploader onItems={setItems} />
-          <div className="action-row">
-            <button type="button" onClick={runQuote} disabled={running || items.length === 0}>
-              Run Quote
-            </button>
-            <RuntimeTimer running={running} finishedDurationMs={duration} />
-          </div>
-          <p className="disclaimer">Prices may exclude shipping and tax.</p>
-          {runId ? <p className="small">Run ID: {runId}</p> : null}
-          {error ? <p className="error">{error}</p> : null}
+      <section className="search-shell panel">
+        <div className="brand-row">
+          <h1>SupplyFlare</h1>
+          <img src="/logo.svg" alt="SupplyFlare logo" className="brand-logo" />
         </div>
 
-        <section className="panel">
-          <QuoteResults results={results} />
-        </section>
+        <p className="small">Type anything, paste CSV lines, or drag/drop a CSV file.</p>
+
+        <div
+          className="drop-zone"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={onDrop}
+          onClick={() => document.getElementById("csv-file")?.click()}
+        >
+          <textarea
+            value={rawInput}
+            onChange={(event) => setRawInput(event.target.value)}
+            placeholder="macbook pro 14 m3,1&#10;paper towels 2-ply,4&#10;SKU-ABC-123,2"
+            rows={6}
+          />
+          <input
+            id="csv-file"
+            type="file"
+            accept=".csv,text/csv"
+            style={{ display: "none" }}
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              await applyDroppedFile(file);
+            }}
+          />
+          <span className="small">Drag CSV here or click to upload</span>
+        </div>
+
+        <div className="row" style={{ justifyContent: "space-between", marginTop: 10 }}>
+          <button type="button" onClick={runQuote} disabled={running || items.length === 0}>
+            Search
+          </button>
+          <RuntimeTimer running={running} finishedDurationMs={duration} />
+        </div>
+
+        <p className="disclaimer">Prices may exclude shipping and tax.</p>
+        {runId ? <p className="small">Run ID: {runId}</p> : null}
+        {error ? <p className="error">{error}</p> : null}
+      </section>
+
+      <section className="container panel" style={{ marginTop: 14 }}>
+        <QuoteResults results={results} />
       </section>
     </main>
   );

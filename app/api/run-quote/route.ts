@@ -15,23 +15,20 @@ const inputSchema = z.object({
   input_type: z.enum(["text", "sku", "csv"]).default("text")
 });
 
+type SiteMatch = {
+  site: string;
+  title?: string;
+  price?: number;
+  currency?: string;
+  url?: string;
+  status: string;
+  message?: string;
+  latency_ms?: number;
+};
+
 type RustEvent =
   | { type: "started"; run_id: string; started_at: string }
-  | {
-      type: "match";
-      item_index: number;
-      query: string;
-      match: {
-        site: string;
-        title?: string;
-        price?: number;
-        currency?: string;
-        url?: string;
-        status: string;
-        message?: string;
-        latency_ms?: number;
-      };
-    }
+  | { type: "match"; item_index: number; query: string; match: SiteMatch }
   | { type: "item_done"; item_index: number; query: string; best?: { site: string; price: number; url: string } }
   | { type: "done"; duration_ms: number }
   | { type: "error"; message: string };
@@ -40,16 +37,11 @@ function toNdjson(event: RustEvent) {
   return `${JSON.stringify(event)}\n`;
 }
 
+function canPersist() {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY));
+}
+
 export async function POST(request: Request) {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const rawBody = await request.json();
   const parsedInput = inputSchema.safeParse(rawBody);
 
@@ -64,36 +56,104 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No valid items in request" }, { status: 400 });
   }
 
-  const service = createSupabaseServiceClient();
+  let userId: string | null = null;
+  let service: ReturnType<typeof createSupabaseServiceClient> | null = null;
 
-  await service.from("quote_runs").insert({
-    id: runId,
-    user_id: user.id,
-    input_type: parsedInput.data.input_type,
-    raw_input: JSON.stringify(parsedInput.data.items),
-    category: normalized.category,
-    site_plan: normalized.site_plan,
-    status: "running"
-  });
+  try {
+    const supabase = await createSupabaseServerClient();
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+    userId = user?.id ?? null;
+  } catch {
+    userId = null;
+  }
 
-  const origin = process.env.APP_BASE_URL ?? new URL(request.url).origin;
-  const rustResponse = await fetch(`${origin}/api/quote_stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      run_id: runId,
-      items: normalized.normalized_items,
+  if (userId && canPersist()) {
+    service = createSupabaseServiceClient();
+    await service.from("quote_runs").insert({
+      id: runId,
+      user_id: userId,
+      input_type: parsedInput.data.input_type,
+      raw_input: JSON.stringify(parsedInput.data.items),
       category: normalized.category,
       site_plan: normalized.site_plan,
-      options: {
-        cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0")
-      }
-    })
+      status: "running"
+    });
+  }
+
+  const origin = process.env.APP_BASE_URL ?? new URL(request.url).origin;
+  const payload = {
+    run_id: runId,
+    items: normalized.normalized_items,
+    category: normalized.category,
+    site_plan: normalized.site_plan,
+    options: {
+      cache_ttl: Number(process.env.CACHE_TTL_SECONDS ?? "0")
+    }
+  };
+
+  const streamResponse = await fetch(`${origin}/api/quote_stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
 
-  if (!rustResponse.ok || !rustResponse.body) {
-    await service.from("quote_runs").update({ status: "error" }).eq("id", runId);
-    return NextResponse.json({ error: "Quote stream failed", status: rustResponse.status }, { status: 502 });
+  if (!streamResponse.ok || !streamResponse.body) {
+    const quoteResponse = await fetch(`${origin}/api/quote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!quoteResponse.ok) {
+      if (service && userId) {
+        await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", userId);
+      }
+      return NextResponse.json({ error: "Quote failed", stream_status: streamResponse.status, quote_status: quoteResponse.status }, { status: 502 });
+    }
+
+    const quoteJson = await quoteResponse.json();
+    const lines: string[] = [];
+    lines.push(toNdjson({ type: "started", run_id: runId, started_at: new Date().toISOString() }));
+
+    for (let i = 0; i < quoteJson.items.length; i++) {
+      const item = quoteJson.items[i];
+      for (const match of item.matches) {
+        const event: RustEvent = { type: "match", item_index: i, query: item.query, match };
+        lines.push(toNdjson(event));
+
+        if (service && userId) {
+          await service.from("quote_results").insert({
+            run_id: runId,
+            item_index: i,
+            site: match.site,
+            title: match.title ?? null,
+            price: typeof match.price === "number" ? match.price : null,
+            currency: match.currency ?? "USD",
+            url: match.url ?? null,
+            status: match.status,
+            message: match.message ?? null,
+            latency_ms: match.latency_ms ?? null
+          });
+        }
+      }
+
+      lines.push(toNdjson({ type: "item_done", item_index: i, query: item.query, best: item.best }));
+    }
+
+    lines.push(toNdjson({ type: "done", duration_ms: quoteJson.duration_ms ?? 0 }));
+
+    if (service && userId) {
+      await service.from("quote_runs").update({ status: "done", duration_ms: quoteJson.duration_ms ?? 0 }).eq("id", runId).eq("user_id", userId);
+    }
+
+    return new Response(lines.join(""), {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache"
+      }
+    });
   }
 
   const encoder = new TextEncoder();
@@ -103,7 +163,7 @@ export async function POST(request: Request) {
     async start(controller) {
       controller.enqueue(encoder.encode(toNdjson({ type: "started", run_id: runId, started_at: new Date().toISOString() })));
 
-      const reader = rustResponse.body!.getReader();
+      const reader = streamResponse.body!.getReader();
       let buffer = "";
 
       try {
@@ -125,7 +185,7 @@ export async function POST(request: Request) {
             if (!dataLine) continue;
             const parsed = JSON.parse(dataLine) as RustEvent;
 
-            if (parsed.type === "match") {
+            if (parsed.type === "match" && service && userId) {
               await service.from("quote_results").insert({
                 run_id: runId,
                 item_index: parsed.item_index,
@@ -140,23 +200,21 @@ export async function POST(request: Request) {
               });
             }
 
-            if (parsed.type === "done") {
-              await service
-                .from("quote_runs")
-                .update({ status: "done", duration_ms: parsed.duration_ms })
-                .eq("id", runId)
-                .eq("user_id", user.id);
+            if (parsed.type === "done" && service && userId) {
+              await service.from("quote_runs").update({ status: "done", duration_ms: parsed.duration_ms }).eq("id", runId).eq("user_id", userId);
             }
 
-            if (parsed.type === "error") {
-              await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", user.id);
+            if (parsed.type === "error" && service && userId) {
+              await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", userId);
             }
 
             controller.enqueue(encoder.encode(toNdjson(parsed)));
           }
         }
       } catch (error) {
-        await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", user.id);
+        if (service && userId) {
+          await service.from("quote_runs").update({ status: "error" }).eq("id", runId).eq("user_id", userId);
+        }
         controller.enqueue(
           encoder.encode(
             toNdjson({

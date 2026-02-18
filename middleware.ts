@@ -3,7 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import { getSupabasePublishableKey, getSupabaseUrl } from "@/lib/env";
 
 function isProtected(pathname: string) {
-  return pathname.startsWith("/app") || pathname.startsWith("/api/run-quote");
+  return pathname.startsWith("/app");
 }
 
 export async function middleware(request: NextRequest) {
@@ -48,5 +48,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/login", "/signup", "/api/run-quote"]
+  matcher: ["/app/:path*", "/login", "/signup"]
 };

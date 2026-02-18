@@ -119,11 +119,13 @@ export default function LandingPage() {
             const event: StreamEvent = JSON.parse(line);
             if (event.type === "started") setRunId(event.run_id);
             if (event.type === "match") setResults((prev) => mergeMatch(prev, event.item_index, event.query, event.match));
-            if (event.type === "item_done" && event.best) {
+            if (event.type === "item_done") {
               setResults((prev) => {
                 const next = [...prev];
                 while (next.length <= event.item_index) next.push({ query: event.query, matches: [] });
-                next[event.item_index].best = event.best;
+                if (event.best) {
+                  next[event.item_index].best = event.best;
+                }
                 return next;
               });
             }

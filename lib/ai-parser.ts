@@ -73,10 +73,13 @@ export async function parseAndRoute(items: QuoteItem[]): Promise<ParsedPlan> {
     if (!content) throw new Error("No content from AI parser");
 
     const parsed = aiResponseSchema.parse(JSON.parse(content));
+    const fallback = fallbackCategorize(normalized);
+    const safeItems = normalizeItems(parsed.normalized_items);
+    const safeSitePlan = parsed.site_plan.filter((site) => site.trim().length > 0);
     return {
-      normalized_items: normalizeItems(parsed.normalized_items),
+      normalized_items: safeItems.length > 0 ? safeItems : normalized,
       category: parsed.category,
-      site_plan: parsed.site_plan,
+      site_plan: safeSitePlan.length > 0 ? safeSitePlan : fallback.site_plan,
       source: "ai"
     };
   } catch {

@@ -8,8 +8,8 @@ type PlanResponse = {
   blueprint: ProjectBlueprint;
 };
 
-type EditableMaterial = ProjectBlueprint["materials"][number] & { checked: boolean };
-type EditableTool = ProjectBlueprint["tools"][number] & { owned: boolean; checked: boolean };
+type EditableMaterial = ProjectBlueprint["materials"][number] & { checked: boolean; unit_cost: number };
+type EditableTool = ProjectBlueprint["tools"][number] & { owned: boolean };
 
 function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
@@ -37,11 +37,15 @@ function nodeColor(kind: "start" | "task" | "decision" | "finish") {
 }
 
 function toMaterialRows(materials: ProjectBlueprint["materials"]): EditableMaterial[] {
-  return materials.map((item) => ({ ...item, checked: false }));
+  return materials.map((item) => ({
+    ...item,
+    checked: false,
+    unit_cost: item.qty > 0 ? item.est_cost / item.qty : item.est_cost
+  }));
 }
 
 function toToolRows(tools: ProjectBlueprint["tools"]): EditableTool[] {
-  return tools.map((tool) => ({ ...tool, checked: false, owned: false }));
+  return tools.map((tool) => ({ ...tool, owned: false }));
 }
 
 function labelLines(text: string): string[] {
@@ -57,7 +61,6 @@ export default function LandingPage() {
   const [budgetTarget, setBudgetTarget] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<"gemini" | "fallback" | null>(null);
   const [blueprint, setBlueprint] = useState<ProjectBlueprint | null>(null);
   const [materials, setMaterials] = useState<EditableMaterial[]>([]);
   const [tools, setTools] = useState<EditableTool[]>([]);
@@ -100,7 +103,6 @@ export default function LandingPage() {
       }
 
       const data = (await response.json()) as PlanResponse;
-      setSource(data.source);
       setBlueprint(data.blueprint);
       setMaterials(toMaterialRows(data.blueprint.materials));
       setTools(toToolRows(data.blueprint.tools));
@@ -124,6 +126,28 @@ export default function LandingPage() {
     setTools((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
+  function updateMaterialQty(id: string, qtyRaw: string) {
+    const qty = Math.max(0, Number(qtyRaw || "0"));
+    setMaterials((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const est = Math.round((item.unit_cost * qty + Number.EPSILON) * 100) / 100;
+        return { ...item, qty, est_cost: est };
+      })
+    );
+  }
+
+  function updateMaterialEst(id: string, estRaw: string) {
+    const estCost = Math.max(0, Number(estRaw || "0"));
+    setMaterials((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const unitCost = item.qty > 0 ? estCost / item.qty : estCost;
+        return { ...item, est_cost: estCost, unit_cost: unitCost };
+      })
+    );
+  }
+
   async function copyMaterialList() {
     if (materials.length === 0) return;
     const lines = materials.map((item) => `- ${item.name} | ${item.qty} ${item.unit} | Est ${money(item.est_cost)}`);
@@ -134,17 +158,31 @@ export default function LandingPage() {
   }
 
   const chartMax = blueprint?.cost_breakdown.reduce((max, bucket) => Math.max(max, bucket.value), 1) ?? 1;
-  const diagramWidth = Math.max(980, (blueprint?.diagram.nodes.length ?? 6) * 150 + 120);
-  const nodePositions = useMemo(() => {
-    if (!blueprint) return new Map<string, { x: number; y: number }>();
-    const map = new Map<string, { x: number; y: number }>();
-    blueprint.diagram.nodes.forEach((node, index) => {
-      const x = 60 + index * 145;
-      const y = index % 3 === 0 ? 85 : index % 3 === 1 ? 145 : 48;
-      map.set(node.id, { x, y });
-    });
-    return map;
+  const diagramNodes = useMemo(() => {
+    const phaseOne = blueprint?.phases[0]?.name ?? "Scope";
+    const phaseTwo = blueprint?.phases[1]?.name ?? "Procure";
+    const phaseThree = blueprint?.phases[2]?.name ?? "Execute";
+    return [
+      { id: "d1", label: "Project Input", kind: "start" as const, x: 26, y: 78 },
+      { id: "d2", label: phaseOne, kind: "task" as const, x: 170, y: 24 },
+      { id: "d3", label: "Code + Safety Check", kind: "decision" as const, x: 338, y: 24 },
+      { id: "d4", label: phaseTwo, kind: "task" as const, x: 170, y: 132 },
+      { id: "d5", label: phaseThree, kind: "task" as const, x: 338, y: 132 },
+      { id: "d6", label: "Final QA", kind: "finish" as const, x: 506, y: 78 }
+    ];
   }, [blueprint]);
+  const diagramNodeMap = useMemo(
+    () => new Map(diagramNodes.map((node) => [node.id, node])),
+    [diagramNodes]
+  );
+  const diagramEdges = [
+    { from: "d1", to: "d2", label: "" },
+    { from: "d2", to: "d3", label: "" },
+    { from: "d3", to: "d4", label: "approved" },
+    { from: "d3", to: "d2", label: "revise" },
+    { from: "d4", to: "d5", label: "" },
+    { from: "d5", to: "d6", label: "" }
+  ];
 
   return (
     <main className="planner-root">
@@ -156,13 +194,13 @@ export default function LandingPage() {
             <img src="/logo.svg" alt="SupplyFlare logo" />
             <span>SupplyFlare</span>
           </div>
-          <div className="status-chip">{source ? `Model: ${source}` : "Ready"}</div>
+          <img src="/logo.svg" alt="SupplyFlare mark" className="corner-logo" />
         </header>
 
         <div className="headline-wrap">
           <p className="eyebrow">Project Blueprint Agent</p>
-          <h1>Type Any Project. Get a Smart Action Plan + Store List.</h1>
-          <p className="subtle">Left: workflow, diagrams, tips. Right: editable materials and tool checklist.</p>
+          <h1>Type Any Project. Get a Smart Action Plan + Supply List.</h1>
+          <p className="subtle">Left: workflow, diagrams, tips. Right: editable Supply List and tool checklist.</p>
         </div>
 
         <div className="intake-grid">
@@ -255,17 +293,17 @@ export default function LandingPage() {
               <article className="panel-card">
                 <h3>Workflow Diagram</h3>
                 <div className="diagram-scroll">
-                  <svg viewBox={`0 0 ${diagramWidth} 220`} className="diagram-svg" role="img" aria-label="Workflow map" style={{ width: diagramWidth }}>
+                  <svg viewBox="0 0 648 220" className="diagram-svg" role="img" aria-label="Workflow map">
                     <defs>
                       <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
                         <path d="M 0 0 L 8 4 L 0 8 z" fill="#2f6150" />
                       </marker>
                     </defs>
-                    {blueprint.diagram.edges.map((edge) => {
-                      const from = nodePositions.get(edge.from);
-                      const to = nodePositions.get(edge.to);
+                    {diagramEdges.map((edge) => {
+                      const from = diagramNodeMap.get(edge.from);
+                      const to = diagramNodeMap.get(edge.to);
                       if (!from || !to) return null;
-                      const x1 = from.x + 122;
+                      const x1 = from.x + 116;
                       const y1 = from.y + 28;
                       const x2 = to.x;
                       const y2 = to.y + 28;
@@ -290,16 +328,14 @@ export default function LandingPage() {
                         </g>
                       );
                     })}
-                    {blueprint.diagram.nodes.map((node) => {
-                      const pos = nodePositions.get(node.id);
-                      if (!pos) return null;
+                    {diagramNodes.map((node) => {
                       const lines = labelLines(node.label);
                       return (
                         <g key={node.id}>
-                          <rect x={pos.x} y={pos.y} width={122} height={56} rx={16} fill={nodeColor(node.kind)} stroke="#7bb49c" />
-                          <text x={pos.x + 61} y={pos.y + 24} textAnchor="middle" className="diagram-label">
+                          <rect x={node.x} y={node.y} width={116} height={56} rx={16} fill={nodeColor(node.kind)} stroke="#7bb49c" />
+                          <text x={node.x + 58} y={node.y + 24} textAnchor="middle" className="diagram-label">
                             {lines.map((line, idx) => (
-                              <tspan key={line} x={pos.x + 61} dy={idx === 0 ? 0 : 14}>
+                              <tspan key={line} x={node.x + 58} dy={idx === 0 ? 0 : 14}>
                                 {line}
                               </tspan>
                             ))}
@@ -387,7 +423,7 @@ export default function LandingPage() {
         <aside className="right-pane">
           <article className="rail-card">
             <div className="row-split">
-              <h3>Materials List</h3>
+              <h3>Supply List</h3>
               <span>{checkedCount}/{materials.length} checked</span>
             </div>
             <div className="actions-row">
@@ -419,7 +455,7 @@ export default function LandingPage() {
                         <input
                           value={item.qty}
                           inputMode="decimal"
-                          onChange={(event) => updateMaterial(item.id, { qty: Number(event.target.value || "0") })}
+                          onChange={(event) => updateMaterialQty(item.id, event.target.value)}
                         />
                       </td>
                       <td>
@@ -428,7 +464,7 @@ export default function LandingPage() {
                           <input
                             value={item.est_cost}
                             inputMode="decimal"
-                            onChange={(event) => updateMaterial(item.id, { est_cost: Number(event.target.value || "0") })}
+                            onChange={(event) => updateMaterialEst(item.id, event.target.value)}
                           />
                         </div>
                       </td>
@@ -447,14 +483,13 @@ export default function LandingPage() {
             <div className="tool-list">
               {tools.map((tool) => (
                 <label className="tool-check" key={tool.id}>
-                  <input type="checkbox" checked={tool.checked} onChange={(event) => updateTool(tool.id, { checked: event.target.checked })} />
                   <div>
                     <input type="text" value={tool.name} onChange={(event) => updateTool(tool.id, { name: event.target.value })} />
                     <small>{tool.purpose}</small>
                   </div>
                   <label className="own-toggle">
                     <input type="checkbox" checked={tool.owned} onChange={(event) => updateTool(tool.id, { owned: event.target.checked })} />
-                    <span>Own</span>
+                    <span>Owned</span>
                   </label>
                   <div className="tool-money">{money(tool.est_cost)}</div>
                 </label>

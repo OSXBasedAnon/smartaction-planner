@@ -574,6 +574,222 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
           : [])
       ];
 
+  const phases: ProjectBlueprint["phases"] = isElectrical
+    ? [
+        {
+          id: "p1",
+          name: "Plan circuits and layout",
+          goal: "Map outlet and lighting locations, panel loads, and code constraints.",
+          duration_hours: 4,
+          steps: [
+            {
+              id: "p1s1",
+              title: "Map outlets and lighting zones",
+              details: "Mark each outlet/light location and assign intended circuit groups.",
+              checkpoint: "Room layout map completed",
+              warning: ""
+            },
+            {
+              id: "p1s2",
+              title: "Validate panel capacity and breaker plan",
+              details: "Confirm available panel slots, breaker compatibility, and load assumptions.",
+              checkpoint: "Circuit schedule drafted",
+              warning: "Overloaded circuits are a safety hazard."
+            }
+          ],
+          deliverables: ["Circuit map", "Breaker schedule"]
+        },
+        {
+          id: "p2",
+          name: "Rough-in wiring and boxes",
+          goal: "Install cable runs, boxes, and switch locations before device install.",
+          duration_hours: 6,
+          steps: [
+            {
+              id: "p2s1",
+              title: "Pull cable and secure routing",
+              details: "Run NM cable, staple correctly, and keep protection clearances.",
+              checkpoint: "All planned runs completed",
+              warning: ""
+            },
+            {
+              id: "p2s2",
+              title: "Set boxes and label conductors",
+              details: "Install outlet/switch boxes and label each run for faster finish-out.",
+              checkpoint: "Rough-in complete",
+              warning: "Mislabeling slows troubleshooting and increases errors."
+            }
+          ],
+          deliverables: ["Rough-in pass", "Labeled box map"]
+        },
+        {
+          id: "p3",
+          name: "Install devices, fixtures, and test",
+          goal: "Terminate devices, install lights, energize safely, and verify operation.",
+          duration_hours: 8,
+          steps: [
+            {
+              id: "p3s1",
+              title: "Terminate outlets, switches, and fixtures",
+              details: "Install receptacles, switches, and LED fixtures per layout and polarity.",
+              checkpoint: "All devices installed",
+              warning: ""
+            },
+            {
+              id: "p3s2",
+              title: "Energize and functional test",
+              details: "Turn circuits on one by one and test outlets, switches, and lighting levels.",
+              checkpoint: "Final electrical checklist complete",
+              warning: "Stop immediately if breaker trips or device overheats."
+            }
+          ],
+          deliverables: ["Verified operation", "Punch list"]
+        }
+      ]
+    : isKitchen
+      ? [
+          {
+            id: "p1",
+            name: "Scope kitchen layout and measurements",
+            goal: "Lock cabinet, appliance, plumbing, and finish dimensions.",
+            duration_hours: 5,
+            steps: [
+              {
+                id: "p1s1",
+                title: "Measure walls, openings, and service points",
+                details: "Capture exact dimensions for cabinet runs, sink centerline, and appliance clearances.",
+                checkpoint: "Kitchen measurement sheet complete",
+                warning: ""
+              },
+              {
+                id: "p1s2",
+                title: "Finalize cabinet/counter and fixture selections",
+                details: "Choose cabinet footprint, countertop type, sink/faucet, and backsplash scope.",
+                checkpoint: "Material specification approved",
+                warning: "Late spec changes drive major cost and schedule delays."
+              }
+            ],
+            deliverables: ["Kitchen layout plan", "Selected finish schedule"]
+          },
+          {
+            id: "p2",
+            name: "Demolition and prep",
+            goal: "Remove old finishes and prep level, clean install surfaces.",
+            duration_hours: 7,
+            steps: [
+              {
+                id: "p2s1",
+                title: "Remove old fixtures and finishes",
+                details: "Demo cabinets/counters as needed while protecting reusable systems.",
+                checkpoint: "Demo and debris removal complete",
+                warning: ""
+              },
+              {
+                id: "p2s2",
+                title: "Prepare walls, plumbing, and electrical points",
+                details: "Patch surfaces and verify rough-in locations before new installs.",
+                checkpoint: "Install-ready surfaces verified",
+                warning: ""
+              }
+            ],
+            deliverables: ["Prep checklist", "Install-ready room"]
+          },
+          {
+            id: "p3",
+            name: "Install and finish",
+            goal: "Set cabinets, counters, sink/faucet, backsplash, and final finishes.",
+            duration_hours: 16,
+            steps: [
+              {
+                id: "p3s1",
+                title: "Install cabinets and countertop",
+                details: "Level and secure cabinets, then template/set countertop.",
+                checkpoint: "Cabinets and countertop installed",
+                warning: ""
+              },
+              {
+                id: "p3s2",
+                title: "Install sink/faucet and backsplash then closeout",
+                details: "Connect plumbing fixtures, complete backsplash, and perform final cleanup/QA.",
+                checkpoint: "Kitchen closeout checklist complete",
+                warning: "Verify for leaks and proper drainage before signoff."
+              }
+            ],
+            deliverables: ["Functional kitchen", "Final punch list"]
+          }
+        ]
+      : [
+          {
+            id: "p1",
+            name: "Scope and measurements",
+            goal: "Translate goal into measurable requirements.",
+            duration_hours: isGrocery ? 0.5 : 3,
+            steps: [
+              {
+                id: "p1s1",
+                title: "Define output target",
+                details: "Write what completion looks like, constraints, and quality tier.",
+                checkpoint: "Scope brief approved",
+                warning: ""
+              },
+              {
+                id: "p1s2",
+                title: "Capture dimensions and dependencies",
+                details: "Measure and map constraints before buying.",
+                checkpoint: "Measurement log complete",
+                warning: "Measurement errors drive rework and extra spend."
+              }
+            ],
+            deliverables: ["Scope brief", "Measurement sheet"]
+          },
+          {
+            id: "p2",
+            name: "Procurement and staging",
+            goal: "Build complete list and prep workspace.",
+            duration_hours: isGrocery ? 1 : 5,
+            steps: [
+              {
+                id: "p2s1",
+                title: "Finalize items and alternatives",
+                details: "Set core items plus fallback options.",
+                checkpoint: "Store-ready list created",
+                warning: ""
+              },
+              {
+                id: "p2s2",
+                title: "Stage tools and safety",
+                details: "Prepare tools and PPE before first install step.",
+                checkpoint: "Pre-work safety checklist complete",
+                warning: ""
+              }
+            ],
+            deliverables: ["Materials list", "Tool checklist"]
+          },
+          {
+            id: "p3",
+            name: "Execution and closeout",
+            goal: "Execute sequence and verify quality.",
+            duration_hours: isGrocery ? 0.5 : 8,
+            steps: [
+              {
+                id: "p3s1",
+                title: "Run build sequence",
+                details: "Execute each task in order and validate checkpoints.",
+                checkpoint: "Core install complete",
+                warning: ""
+              },
+              {
+                id: "p3s2",
+                title: "QA and cleanup",
+                details: "Validate performance, finish quality, and leftover handling.",
+                checkpoint: "Closeout checklist complete",
+                warning: ""
+              }
+            ],
+            deliverables: ["QA checklist", "Return/reorder list"]
+          }
+        ];
+
   const base: ProjectBlueprint = {
     title: contextTitle,
     objective: `Plan and execute: ${normalized}`,
@@ -597,77 +813,7 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
       mid: 0,
       high: 0
     },
-    phases: [
-      {
-        id: "p1",
-        name: "Scope and measurements",
-        goal: "Translate goal into measurable requirements.",
-        duration_hours: isGrocery ? 0.5 : 3,
-        steps: [
-          {
-            id: "p1s1",
-            title: "Define output target",
-            details: "Write what completion looks like, constraints, and quality tier.",
-            checkpoint: "Scope brief approved",
-            warning: ""
-          },
-          {
-            id: "p1s2",
-            title: "Capture dimensions and dependencies",
-            details: "Measure and map constraints before buying.",
-            checkpoint: "Measurement log complete",
-            warning: "Measurement errors drive rework and extra spend."
-          }
-        ],
-        deliverables: ["Scope brief", "Measurement sheet"]
-      },
-      {
-        id: "p2",
-        name: "Procurement and staging",
-        goal: "Build complete list and prep workspace.",
-        duration_hours: isGrocery ? 1 : 5,
-        steps: [
-          {
-            id: "p2s1",
-            title: "Finalize items and alternatives",
-            details: "Set core items plus fallback options.",
-            checkpoint: "Store-ready list created",
-            warning: ""
-          },
-          {
-            id: "p2s2",
-            title: "Stage tools and safety",
-            details: "Prepare tools and PPE before first install step.",
-            checkpoint: "Pre-work safety checklist complete",
-            warning: ""
-          }
-        ],
-        deliverables: ["Materials list", "Tool checklist"]
-      },
-      {
-        id: "p3",
-        name: "Execution and closeout",
-        goal: "Execute sequence and verify quality.",
-        duration_hours: isGrocery ? 0.5 : isKitchen ? 20 : 10,
-        steps: [
-          {
-            id: "p3s1",
-            title: "Run build sequence",
-            details: "Execute each task in order and validate checkpoints.",
-            checkpoint: "Core install complete",
-            warning: ""
-          },
-          {
-            id: "p3s2",
-            title: "QA and cleanup",
-            details: "Validate performance, finish quality, and leftover handling.",
-            checkpoint: "Closeout checklist complete",
-            warning: ""
-          }
-        ],
-        deliverables: ["QA checklist", "Return/reorder list"]
-      }
-    ],
+    phases,
     diagram: baselineDiagram(),
     materials,
     tools,

@@ -105,6 +105,12 @@ select {
   height: 26px;
 }
 
+.corner-logo {
+  width: 24px;
+  height: 24px;
+  opacity: 0.85;
+}
+
 .status-chip {
   border-radius: 999px;
   padding: 8px 12px;
@@ -331,8 +337,8 @@ button:disabled {
 }
 
 .diagram-svg {
-  width: 980px;
-  max-width: none;
+  width: 100%;
+  max-width: 648px;
 }
 
 .diagram-label {
@@ -521,7 +527,7 @@ td small {
   border-radius: 10px;
   padding: 8px;
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: 1fr auto auto;
   gap: 8px;
   align-items: start;
   background: #fbfffd;
@@ -536,7 +542,8 @@ td small {
   align-items: center;
   gap: 4px;
   color: var(--ink-soft);
-  font-size: 0.8rem;
+  font-size: 0.73rem;
+  white-space: nowrap;
 }
 
 .tool-money {

@@ -1,4 +1,4 @@
-# SupplyFlare Blueprint Agent
+# Smart Action Blueprint Agent
 
 SupplyFlare is now a Gemini-powered project planning app for DIY and small trade workflows.
 

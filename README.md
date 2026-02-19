@@ -47,7 +47,3 @@ If Gemini is unavailable or returns invalid JSON, the app automatically returns 
 npm install
 npm run dev
 ```
-
-## Notes
-- This pivot removed the quote scraping entry path.
-- The old Rust scraper stack has been removed from this project.

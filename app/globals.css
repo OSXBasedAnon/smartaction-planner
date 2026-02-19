@@ -299,6 +299,29 @@ button:disabled {
   white-space: nowrap;
 }
 
+.badge {
+  border-width: 1px;
+  border-style: solid;
+}
+
+.badge-complexity {
+  background: #e7f7ee;
+  border-color: #b8dec8;
+  color: #1f6148;
+}
+
+.badge-budget {
+  background: #ecf7ff;
+  border-color: #bdd8ea;
+  color: #215773;
+}
+
+.badge-time {
+  background: #fff4e7;
+  border-color: #e8d0b2;
+  color: #744a1e;
+}
+
 .chips {
   display: flex;
   gap: 8px;
@@ -313,6 +336,21 @@ button:disabled {
   border: 1px solid #d2e4da;
   color: var(--ink-soft);
   font-size: 0.78rem;
+}
+
+.chip-tone-0 {
+  background: #edf9f1;
+  border-color: #cfe7d9;
+}
+
+.chip-tone-1 {
+  background: #eef8ff;
+  border-color: #d3e4f0;
+}
+
+.chip-tone-2 {
+  background: #f5f6ff;
+  border-color: #d9ddf5;
 }
 
 .diagram-scroll {
@@ -405,6 +443,16 @@ button:disabled {
 .bar-fill {
   height: 100%;
   background: linear-gradient(90deg, var(--brand), #31a482);
+}
+
+.bar-fill-time {
+  background: linear-gradient(90deg, #2f84d7, #66b3f3);
+}
+
+.time-title {
+  margin: 12px 0 6px;
+  font-size: 0.96rem;
+  color: #2d5f82;
 }
 
 .tip-list {

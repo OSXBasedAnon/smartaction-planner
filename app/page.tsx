@@ -163,6 +163,14 @@ export default function LandingPage() {
   }
 
   const chartMax = blueprint?.cost_breakdown.reduce((max, bucket) => Math.max(max, bucket.value), 1) ?? 1;
+  const totalPhaseHours = blueprint?.phases.reduce((acc, phase) => acc + phase.duration_hours, 0) ?? 1;
+  const timeSplit = blueprint
+    ? [
+        { label: "Plan", value: blueprint.phases[0]?.duration_hours ?? 0 },
+        { label: "Procure", value: blueprint.phases[1]?.duration_hours ?? 0 },
+        { label: "Execute", value: Math.max(0, totalPhaseHours - (blueprint.phases[0]?.duration_hours ?? 0) - (blueprint.phases[1]?.duration_hours ?? 0)) }
+      ]
+    : [];
   const diagramNodes = useMemo(() => {
     const phaseOne = blueprint?.phases[0]?.name ?? "Scope";
     const phaseTwo = blueprint?.phases[1]?.name ?? "Procure";
@@ -201,7 +209,7 @@ export default function LandingPage() {
         </header>
 
         <div className="headline-wrap">
-          <p className="eyebrow">Project Blueprint Agent</p>
+          <p className="eyebrow">Project Agent</p>
           <h1>Type Any Project. Get a Smart Action Plan + Supply List.</h1>
         </div>
 
@@ -280,14 +288,14 @@ export default function LandingPage() {
                     <p>{blueprint.objective}</p>
                   </div>
                   <div className="badge-stack">
-                    <span>{inferComplexityLabel(blueprint.complexity)}</span>
-                    <span>{money(blueprint.budget.mid, blueprint.budget.currency)} estimated midpoint</span>
-                    <span>{blueprint.timeline.total_estimated_hours}h estimate</span>
+                    <span className="badge badge-complexity">{inferComplexityLabel(blueprint.complexity)}</span>
+                    <span className="badge badge-budget">{money(blueprint.budget.mid, blueprint.budget.currency)} estimated midpoint</span>
+                    <span className="badge badge-time">{blueprint.timeline.total_estimated_hours}h estimate</span>
                   </div>
                 </div>
                 <div className="chips">
-                  {blueprint.assumptions.map((assumption) => (
-                    <span key={assumption} className="chip">{assumption}</span>
+                  {blueprint.assumptions.map((assumption, idx) => (
+                    <span key={assumption} className={`chip chip-tone-${idx % 3}`}>{assumption}</span>
                   ))}
                 </div>
               </article>
@@ -384,6 +392,18 @@ export default function LandingPage() {
                           <div className="bar-fill" style={{ width: `${Math.max(8, (bucket.value / chartMax) * 100)}%` }} />
                         </div>
                         <span>{money(bucket.value, blueprint.budget.currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <h4 className="time-title">Time Split</h4>
+                  <div className="bars time-bars">
+                    {timeSplit.map((bucket) => (
+                      <div key={bucket.label} className="bar-row">
+                        <span>{bucket.label}</span>
+                        <div className="bar-track">
+                          <div className="bar-fill bar-fill-time" style={{ width: `${Math.max(8, (bucket.value / Math.max(totalPhaseHours, 1)) * 100)}%` }} />
+                        </div>
+                        <span>{bucket.value}h</span>
                       </div>
                     ))}
                   </div>

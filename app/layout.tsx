@@ -16,7 +16,7 @@ const space = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "SupplyFlare Blueprint Agent",
+  title: "SupplyFlare",
   description: "Turn any project idea into a practical DIY workflow, editable materials list, and cost plan.",
   icons: {
     icon: "/logo.svg",

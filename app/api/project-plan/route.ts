@@ -135,6 +135,206 @@ function unwrapBlueprint(raw: unknown) {
   return raw;
 }
 
+function toNumber(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toStringList(value: unknown, fallback: string[]) {
+  if (!Array.isArray(value)) return fallback;
+  const normalized = value.map((v) => String(v).trim()).filter((v) => v.length > 0);
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function parseCsvItems(csvInput: string) {
+  return csvInput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line, index) => {
+      const [nameRaw, qtyRaw] = line.split(",").map((part) => part.trim());
+      const name = nameRaw || `Imported item ${index + 1}`;
+      const qty = Math.max(1, toNumber(qtyRaw, 1));
+      return {
+        id: `csv_${index + 1}`,
+        name,
+        spec: "Imported from existing list",
+        qty,
+        unit: "pcs",
+        category: "imported",
+        priority: "recommended" as const,
+        est_cost: 25 * qty,
+        notes: "",
+        alternatives: []
+      };
+    });
+}
+
+function neutralBlueprint(projectInput: string, csvInput: string, budgetTarget?: number) {
+  const imported = parseCsvItems(csvInput);
+  const mid = typeof budgetTarget === "number" ? budgetTarget : 900;
+  const low = Math.max(0, Math.round(mid * 0.65));
+  const high = Math.round(mid * 1.35);
+
+  return {
+    title: `${projectInput.trim() || "Project"} Plan`,
+    objective: `Plan and execute: ${projectInput.trim() || "user-requested project"}`,
+    complexity: "moderate" as const,
+    assumptions: [
+      "Estimates are approximate and should be validated before purchase.",
+      "Scope can change based on site conditions.",
+      "Quantities include a small safety margin."
+    ],
+    safety_notes: ["Use task-appropriate PPE and follow local safety/code requirements."],
+    timeline: {
+      total_estimated_hours: 8,
+      suggested_days_min: 1,
+      suggested_days_max: 3
+    },
+    budget: { currency: "USD", low, mid, high },
+    phases: [
+      {
+        id: "p1",
+        name: "Scope and planning",
+        goal: "Clarify project deliverables and constraints.",
+        duration_hours: 2,
+        steps: [
+          { id: "p1s1", title: "Define scope", details: "Confirm success criteria and constraints.", checkpoint: "Scope confirmed", warning: "" }
+        ],
+        deliverables: ["Scope brief"]
+      },
+      {
+        id: "p2",
+        name: "Procurement and prep",
+        goal: "Prepare tools/materials and site readiness.",
+        duration_hours: 2,
+        steps: [
+          { id: "p2s1", title: "Prepare supplies", details: "Finalize supply/tool list and alternatives.", checkpoint: "Supplies ready", warning: "" }
+        ],
+        deliverables: ["Supply list"]
+      },
+      {
+        id: "p3",
+        name: "Execution and closeout",
+        goal: "Run tasks and verify outcomes.",
+        duration_hours: 4,
+        steps: [
+          { id: "p3s1", title: "Execute", details: "Complete core tasks and verify quality.", checkpoint: "Project closed", warning: "" }
+        ],
+        deliverables: ["Completion checklist"]
+      }
+    ],
+    diagram: {
+      nodes: [
+        { id: "d1", label: "Input", kind: "start" as const },
+        { id: "d2", label: "Plan", kind: "task" as const },
+        { id: "d3", label: "Prep", kind: "task" as const },
+        { id: "d4", label: "Execute", kind: "finish" as const }
+      ],
+      edges: [
+        { from: "d1", to: "d2", label: "" },
+        { from: "d2", to: "d3", label: "" },
+        { from: "d3", to: "d4", label: "" }
+      ]
+    },
+    materials: imported,
+    tools: [],
+    cost_breakdown: [
+      { label: "Materials", value: Math.round(low * 0.55) },
+      { label: "Tools", value: Math.round(low * 0.2) },
+      { label: "Buffer", value: Math.round(low * 0.25) }
+    ],
+    tips: [
+      { id: "tip1", title: "Start with scope", detail: "A clear scope prevents waste and rework." },
+      { id: "tip2", title: "Validate quantities", detail: "Double-check quantities before final purchase." },
+      { id: "tip3", title: "Keep alternatives", detail: "Maintain substitute options for critical items." }
+    ],
+    qa: [
+      { question: "How precise is this?", answer: "Treat as a planning baseline and refine with measurements." },
+      { question: "Can this be low-cost?", answer: "Yes, prioritize essentials and optional upgrades separately." }
+    ],
+    agent_fill_ins: ["Generated from Gemini output with schema normalization."],
+    confidence: 0.55
+  };
+}
+
+function coerceCandidate(candidate: unknown, projectInput: string, csvInput: string, budgetTarget?: number) {
+  const base = neutralBlueprint(projectInput, csvInput, budgetTarget);
+  const raw = candidate && typeof candidate === "object" ? (candidate as Record<string, unknown>) : {};
+
+  const rawMaterials = Array.isArray(raw.materials) ? raw.materials : [];
+  const materials = rawMaterials
+    .map((entry, index) => {
+      if (typeof entry === "string") {
+        return {
+          id: `m_${index + 1}`,
+          name: entry,
+          spec: "Project supply item",
+          qty: 1,
+          unit: "pcs",
+          category: "general",
+          priority: "recommended",
+          est_cost: 25,
+          notes: "",
+          alternatives: []
+        };
+      }
+      if (!entry || typeof entry !== "object") return null;
+      const row = entry as Record<string, unknown>;
+      return {
+        id: String(row.id ?? `m_${index + 1}`),
+        name: String(row.name ?? row.title ?? `Item ${index + 1}`),
+        spec: String(row.spec ?? row.description ?? "Project supply item"),
+        qty: Math.max(0, toNumber(row.qty, 1)),
+        unit: String(row.unit ?? "pcs"),
+        category: String(row.category ?? "general"),
+        priority: row.priority === "critical" || row.priority === "optional" ? row.priority : "recommended",
+        est_cost: Math.max(0, toNumber(row.est_cost ?? row.cost, 25)),
+        notes: String(row.notes ?? ""),
+        alternatives: toStringList(row.alternatives, [])
+      };
+    })
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+  const rawTools = Array.isArray(raw.tools) ? raw.tools : [];
+  const tools = rawTools
+    .map((entry, index) => {
+      if (typeof entry === "string") {
+        return { id: `t_${index + 1}`, name: entry, purpose: "Project task", est_cost: 20 };
+      }
+      if (!entry || typeof entry !== "object") return null;
+      const row = entry as Record<string, unknown>;
+      return {
+        id: String(row.id ?? `t_${index + 1}`),
+        name: String(row.name ?? row.title ?? `Tool ${index + 1}`),
+        purpose: String(row.purpose ?? row.use ?? "Project task"),
+        est_cost: Math.max(0, toNumber(row.est_cost ?? row.cost, 20))
+      };
+    })
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+  return {
+    ...base,
+    ...raw,
+    title: String(raw.title ?? base.title),
+    objective: String(raw.objective ?? base.objective),
+    complexity: raw.complexity === "simple" || raw.complexity === "advanced" ? raw.complexity : "moderate",
+    assumptions: toStringList(raw.assumptions, base.assumptions),
+    safety_notes: toStringList(raw.safety_notes, base.safety_notes),
+    timeline: raw.timeline && typeof raw.timeline === "object" ? raw.timeline : base.timeline,
+    budget: raw.budget && typeof raw.budget === "object" ? raw.budget : base.budget,
+    phases: Array.isArray(raw.phases) && raw.phases.length > 0 ? raw.phases : base.phases,
+    diagram: raw.diagram && typeof raw.diagram === "object" ? raw.diagram : base.diagram,
+    materials: materials.length > 0 ? materials : base.materials,
+    tools: tools.length > 0 ? tools : base.tools,
+    cost_breakdown: Array.isArray(raw.cost_breakdown) && raw.cost_breakdown.length > 0 ? raw.cost_breakdown : base.cost_breakdown,
+    tips: Array.isArray(raw.tips) && raw.tips.length > 0 ? raw.tips : base.tips,
+    qa: Array.isArray(raw.qa) && raw.qa.length > 0 ? raw.qa : base.qa,
+    agent_fill_ins: toStringList(raw.agent_fill_ins, base.agent_fill_ins),
+    confidence: Math.max(0, Math.min(1, toNumber(raw.confidence, base.confidence)))
+  };
+}
+
 async function generateWithRepair(projectInput: string, csvInput: string, budgetTarget?: number) {
   const firstText = await callGemini(buildGenerationPrompt(projectInput, csvInput, budgetTarget));
   try {
@@ -143,7 +343,11 @@ async function generateWithRepair(projectInput: string, csvInput: string, budget
   } catch (firstError) {
     const secondText = await callGemini(buildRepairPrompt(projectInput, firstText));
     const secondRaw = unwrapBlueprint(parsePossiblyWrappedJson(secondText));
-    return projectBlueprintSchema.parse(secondRaw);
+    const secondParsed = projectBlueprintSchema.safeParse(secondRaw);
+    if (secondParsed.success) return secondParsed.data;
+
+    const coerced = coerceCandidate(secondRaw, projectInput, csvInput, budgetTarget);
+    return projectBlueprintSchema.parse(coerced);
   }
 }
 

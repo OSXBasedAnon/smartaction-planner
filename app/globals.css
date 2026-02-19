@@ -695,6 +695,10 @@ details p {
   .workspace {
     grid-template-columns: 1fr;
   }
+
+  .right-pane {
+    order: -1;
+  }
 }
 
 @media (max-width: 760px) {

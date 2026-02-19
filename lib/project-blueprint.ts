@@ -93,8 +93,8 @@ export const projectBlueprintSchema = z.object({
     nodes: z.array(diagramNodeSchema).min(2),
     edges: z.array(diagramEdgeSchema).min(1)
   }),
-  materials: z.array(materialSchema).min(1),
-  tools: z.array(toolSchema).min(1),
+  materials: z.array(materialSchema).default([]),
+  tools: z.array(toolSchema).default([]),
   cost_breakdown: z.array(costBucketSchema).min(1),
   tips: z.array(tipSchema).min(3),
   qa: z.array(qaSchema).min(2),

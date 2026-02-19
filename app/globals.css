@@ -85,7 +85,7 @@ select {
 
 .top-bar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
   gap: 12px;
 }
@@ -101,8 +101,8 @@ select {
 }
 
 .brand-lockup img {
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
 }
 
 .headline-wrap {

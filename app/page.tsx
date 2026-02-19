@@ -215,6 +215,7 @@ export default function LandingPage() {
           <div className="brand-lockup">
             <img src="/logo.svg" alt="SupplyFlare logo" />
             <span>SupplyFlare</span>
+            <span className="beta-bubble">beta</span>
           </div>
         </header>
 
@@ -488,7 +489,12 @@ export default function LandingPage() {
                   {materials.map((item) => (
                     <tr key={item.id}>
                       <td>
-                        <input type="checkbox" checked={item.checked} onChange={(event) => updateMaterial(item.id, { checked: event.target.checked })} />
+                        <input
+                          className="supply-check"
+                          type="checkbox"
+                          checked={item.checked}
+                          onChange={(event) => updateMaterial(item.id, { checked: event.target.checked })}
+                        />
                       </td>
                       <td className="item-cell">
                         <input value={item.name} onChange={(event) => updateMaterial(item.id, { name: event.target.value })} />
@@ -561,6 +567,11 @@ export default function LandingPage() {
           ) : null}
         </aside>
       </section>
+
+      <footer className="site-footer">
+        <span>&copy; 2026 SupplyFlare LLC</span>
+        <a href="mailto:jacob@invariantdata.com">jacob@invariantdata.com</a>
+      </footer>
     </main>
   );
 }

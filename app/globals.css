@@ -105,6 +105,18 @@ select {
   height: 34px;
 }
 
+.beta-bubble {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid #b6c957;
+  background: linear-gradient(140deg, #f0f78f, #d7ec66);
+  color: #47621f;
+  font-weight: 700;
+}
+
 .headline-wrap {
   margin-top: 10px;
 }
@@ -471,9 +483,30 @@ button:disabled {
 }
 
 .time-title {
-  margin: 12px 0 6px;
-  font-size: 0.96rem;
-  color: #2d5f82;
+  margin: 14px 0 8px;
+  font-size: 1rem;
+  font-family: var(--font-space), sans-serif;
+  color: var(--ink);
+}
+
+.time-bars {
+  gap: 12px;
+}
+
+.time-bars .bar-row {
+  grid-template-columns: 86px 1fr 44px;
+  gap: 10px;
+  align-items: center;
+}
+
+.time-bars .bar-row span {
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.time-bars .bar-row span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .tip-list {
@@ -565,6 +598,50 @@ td small {
   padding: 5px 6px;
   outline: none;
   font-size: 0.83rem;
+}
+
+.supply-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 2px solid #8fb9a7;
+  background: #ffffff;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.supply-check::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  clip-path: polygon(14% 44%, 0 59%, 42% 100%, 100% 14%, 84% 0, 42% 62%);
+  transform: scale(0);
+  transform-origin: center;
+  transition: transform 140ms ease-out;
+  background: #ffffff;
+}
+
+.supply-check:hover {
+  transform: translateY(-1px);
+  border-color: #4f8f78;
+  box-shadow: 0 3px 8px rgba(30, 93, 71, 0.12);
+}
+
+.supply-check:checked {
+  background: linear-gradient(145deg, #198b69, #0d6f54);
+  border-color: #0d6f54;
+}
+
+.supply-check:checked::before {
+  transform: scale(1);
+}
+
+.supply-check:active {
+  transform: scale(0.95);
 }
 
 .money-input {
@@ -710,6 +787,21 @@ details p {
 
 .auth-toggle {
   cursor: pointer;
+}
+
+.site-footer {
+  margin-top: 18px;
+  padding: 12px 4px 0;
+  border-top: 1px solid #cfe1d7;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.site-footer a {
+  color: #2b6e57;
 }
 
 @media (max-width: 1180px) {

@@ -570,7 +570,7 @@ export default function LandingPage() {
 
       <footer className="site-footer">
         <span>&copy; 2026 SupplyFlare LLC</span>
-        <a href="mailto:jacob@invariantdata.com">jacob@invariantdata.com</a>
+        <a href="mailto:supplyflare@invariantdata.com">contact us</a>
       </footer>
     </main>
   );

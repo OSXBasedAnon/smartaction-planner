@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectBlueprint } from "@/lib/project-blueprint";
 
 type PlanResponse = {
@@ -61,6 +61,7 @@ export default function LandingPage() {
   const [csvInput, setCsvInput] = useState("");
   const [budgetTarget, setBudgetTarget] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [blueprint, setBlueprint] = useState<ProjectBlueprint | null>(null);
   const [materials, setMaterials] = useState<EditableMaterial[]>([]);
@@ -81,6 +82,14 @@ export default function LandingPage() {
   const checkedCount = useMemo(() => materials.filter((item) => item.checked).length, [materials]);
   const ownedCount = useMemo(() => tools.filter((tool) => tool.owned).length, [tools]);
 
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => {
+      setLoadingSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
   async function runPlan() {
     const trimmed = projectInput.trim();
     if (trimmed.length < 3) {
@@ -89,6 +98,7 @@ export default function LandingPage() {
     }
 
     setLoading(true);
+    setLoadingSeconds(0);
     setError(null);
 
     try {
@@ -258,7 +268,14 @@ export default function LandingPage() {
             }}
           />
           <button type="button" className="primary-btn" onClick={() => void runPlan()} disabled={loading}>
-            {loading ? "Building Blueprint..." : "Generate Blueprint"}
+            {loading ? (
+              <span className="btn-loading">
+                <span className="btn-spinner" />
+                Building Blueprint... {loadingSeconds}s
+              </span>
+            ) : (
+              "Generate Blueprint"
+            )}
           </button>
         </div>
 

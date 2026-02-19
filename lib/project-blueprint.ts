@@ -185,6 +185,108 @@ function baselineDiagram(): ProjectBlueprint["diagram"] {
   };
 }
 
+function dynamicToolSet(flags: {
+  isElectrical: boolean;
+  isKitchen: boolean;
+  isTile: boolean;
+  isPaint: boolean;
+  isPlumbing: boolean;
+  isFraming: boolean;
+  isGrocery: boolean;
+}): ProjectBlueprint["tools"] {
+  if (flags.isGrocery) {
+    return [
+      { id: "t_meal_containers", name: "Meal prep containers", purpose: "Store batch-cooked meals", est_cost: 18 },
+      { id: "t_kitchen_scale", name: "Kitchen scale", purpose: "Portion and recipe consistency", est_cost: 24 },
+      { id: "t_label_marker", name: "Label marker", purpose: "Date and label stored items", est_cost: 8 }
+    ];
+  }
+
+  const tools: ProjectBlueprint["tools"] = [{ id: "t_tape", name: "Tape measure", purpose: "Capture dimensions and layout references", est_cost: 12 }];
+
+  if (flags.isElectrical) {
+    tools.push(
+      { id: "t_wire_strip", name: "Wire stripper/cutter", purpose: "Strip and prep conductors safely", est_cost: 25 },
+      { id: "t_voltage_test", name: "Voltage tester", purpose: "Confirm circuits are de-energized", est_cost: 26 },
+      { id: "t_fish_tape", name: "Fish tape", purpose: "Pull cable through closed cavities", est_cost: 24 }
+    );
+  }
+
+  if (flags.isKitchen || flags.isFraming) {
+    tools.push(
+      { id: "t_drill", name: "Drill driver", purpose: "Fastening, anchors, and assembly", est_cost: 85 },
+      { id: "t_level", name: "4-ft level", purpose: "Level cabinets, fixtures, and framing lines", est_cost: 28 }
+    );
+  }
+
+  if (flags.isTile) {
+    tools.push(
+      { id: "t_tile_trowel", name: "Notched trowel", purpose: "Apply thinset evenly for tile install", est_cost: 16 },
+      { id: "t_grout_float", name: "Grout float", purpose: "Pack grout joints and clean tile face", est_cost: 14 },
+      { id: "t_tile_cutter", name: "Tile cutter", purpose: "Cut tiles to fit edges and corners", est_cost: 79 }
+    );
+  }
+
+  if (flags.isPaint) {
+    tools.push(
+      { id: "t_paint_roller", name: "Roller and tray set", purpose: "Even wall/cabinet paint coverage", est_cost: 18 },
+      { id: "t_brush_set", name: "Detail brush set", purpose: "Cut-ins and trim finish", est_cost: 14 }
+    );
+  }
+
+  if (flags.isPlumbing || flags.isKitchen) {
+    tools.push({ id: "t_pipe_wrench", name: "Adjustable wrench set", purpose: "Sink and faucet connection adjustments", est_cost: 22 });
+  }
+
+  return tools;
+}
+
+function dynamicTips(flags: {
+  isElectrical: boolean;
+  isKitchen: boolean;
+  isTile: boolean;
+  isPaint: boolean;
+  isGrocery: boolean;
+}): ProjectBlueprint["tips"] {
+  if (flags.isElectrical) {
+    return [
+      { id: "tip1", title: "Label every circuit run", detail: "Write destination labels before wall close-up to reduce troubleshooting later." },
+      { id: "tip2", title: "Test before final plate install", detail: "Energize each circuit and verify polarity and switch behavior before finish trim." },
+      { id: "tip3", title: "Keep lighting zones balanced", detail: "Split fixtures across practical switch zones so brightness is usable in daily use." }
+    ];
+  }
+
+  if (flags.isKitchen) {
+    return [
+      { id: "tip1", title: "Lock layout before purchases", detail: "Cabinet and appliance dimensions should be frozen before ordering countertop and backsplash." },
+      { id: "tip2", title: "Dry-fit major components", detail: "Test-fit cabinet and sink alignment before permanent fastening." },
+      { id: "tip3", title: "Sequence saves money", detail: "Cabinets first, then countertop, then backsplash and finish details." }
+    ];
+  }
+
+  if (flags.isTile) {
+    return [
+      { id: "tip1", title: "Start from a centerline", detail: "Dry-layout tile from center to avoid tiny edge cuts." },
+      { id: "tip2", title: "Control thinset coverage", detail: "Work small sections so thinset does not skin over before tile placement." },
+      { id: "tip3", title: "Clean as you go", detail: "Remove thinset squeeze-out and haze early to reduce finish cleanup." }
+    ];
+  }
+
+  if (flags.isGrocery) {
+    return [
+      { id: "tip1", title: "Shop by meal blocks", detail: "Group items by breakfast/lunch/dinner to avoid random overbuy." },
+      { id: "tip2", title: "Use shelf-life ordering", detail: "Buy perishables last and freeze portions same day." },
+      { id: "tip3", title: "Track carry-over inventory", detail: "List what you already have before adding duplicate staples." }
+    ];
+  }
+
+  return [
+    { id: "tip1", title: "Critical-path first", detail: "Buy and stage critical items first; defer optional upgrades." },
+    { id: "tip2", title: "Label and zone", detail: "Split materials by phase to reduce mistakes and time loss." },
+    { id: "tip3", title: "Keep one backup option", detail: "Have one substitute per critical material before starting." }
+  ];
+}
+
 export function ensureBlueprintCoverage(projectInput: string, blueprint: ProjectBlueprint): ProjectBlueprint {
   const lower = projectInput.toLowerCase();
   let materials = [...blueprint.materials];
@@ -193,6 +295,7 @@ export function ensureBlueprintCoverage(projectInput: string, blueprint: Project
 
   const isElectrical = includesAny(lower, ["rewire", "electrical", "outlet", "circuit", "panel", "lighting", "basement"]);
   const isKitchen = includesAny(lower, ["kitchen", "cabinet", "counter", "backsplash", "sink", "remodel"]);
+  const isTile = includesAny(lower, ["tile", "tiling", "grout", "backsplash"]);
   const isGrocery = includesAny(lower, ["grocery", "meal", "pantry", "food list", "shopping list"]);
 
   if (isElectrical) {
@@ -326,6 +429,42 @@ export function ensureBlueprintCoverage(projectInput: string, blueprint: Project
     fillIns.push("Added core kitchen scope items: cabinetry, countertop, sink/faucet, and backsplash.");
   }
 
+  if (isTile) {
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_tile_surface",
+        name: "Tile boxes",
+        spec: "Chosen tile style with 10% overage",
+        qty: 12,
+        unit: "boxes",
+        category: "tile",
+        priority: "critical",
+        est_cost: 520,
+        notes: "Final quantity depends on measured surface area.",
+        alternatives: ["Ceramic budget tile", "Peel-and-stick tile"]
+      },
+      ["tile boxes", "ceramic tile", "porcelain tile", "tile"]
+    );
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_tile_set",
+        name: "Thinset + grout + spacers",
+        spec: "Adhesive, grout color, and leveling/spacer system",
+        qty: 1,
+        unit: "set",
+        category: "tile_install",
+        priority: "critical",
+        est_cost: 110,
+        notes: "Match thinset and grout to tile type and location.",
+        alternatives: []
+      },
+      ["thinset", "grout", "spacers"]
+    );
+    fillIns.push("Added tile installation materials because project includes tile scope.");
+  }
+
   if (isGrocery) {
     materials = addMaterialIfMissing(
       materials,
@@ -386,6 +525,10 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
   const lower = normalized.toLowerCase();
   const isKitchen = includesAny(lower, ["kitchen", "cabinet", "counter", "sink", "backsplash"]);
   const isElectrical = includesAny(lower, ["rewire", "breaker", "panel", "outlet", "circuit", "electrical", "lighting"]);
+  const isTile = includesAny(lower, ["tile", "tiling", "grout", "backsplash"]);
+  const isPaint = includesAny(lower, ["paint", "primer", "roll", "brush"]);
+  const isPlumbing = includesAny(lower, ["plumbing", "faucet", "sink", "pipe", "drain"]);
+  const isFraming = includesAny(lower, ["frame", "framing", "stud", "wall", "room"]);
   const isGrocery = includesAny(lower, ["grocery", "meal", "food", "shopping list", "pantry"]);
   const contextTitle = isKitchen
     ? "Kitchen Remodel Blueprint"
@@ -560,19 +703,7 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
           }
         ];
 
-  const tools: ProjectBlueprint["tools"] = isGrocery
-    ? [
-        { id: "t1", name: "Meal prep containers", purpose: "Store batch-cooked meals", est_cost: 18 },
-        { id: "t2", name: "Kitchen scale", purpose: "Portion and recipe consistency", est_cost: 24 }
-      ]
-    : [
-        { id: "t1", name: "Tape measure", purpose: "Capture accurate dimensions and runs", est_cost: 12 },
-        { id: "t2", name: isElectrical ? "Wire stripper/cutter" : "Circular saw", purpose: isElectrical ? "Strip and prep conductors safely" : "Cut lumber and panel materials", est_cost: isElectrical ? 25 : 95 },
-        { id: "t3", name: "Drill driver", purpose: "Fastening, anchors, and assembly", est_cost: 85 },
-        ...(isElectrical
-          ? [{ id: "t4", name: "Voltage tester", purpose: "Confirm circuits are de-energized", est_cost: 26 }]
-          : [])
-      ];
+  const tools = dynamicToolSet({ isElectrical, isKitchen, isTile, isPaint, isPlumbing, isFraming, isGrocery });
 
   const phases: ProjectBlueprint["phases"] = isElectrical
     ? [
@@ -818,11 +949,7 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
     materials,
     tools,
     cost_breakdown: [],
-    tips: [
-      { id: "tip1", title: "Critical-path first", detail: "Buy and stage critical items first; defer optional upgrades." },
-      { id: "tip2", title: "Label and zone", detail: "Split materials by phase to reduce mistakes and time loss." },
-      { id: "tip3", title: "Keep one backup option", detail: "Have one substitute per critical material before starting." }
-    ],
+    tips: dynamicTips({ isElectrical, isKitchen, isTile, isPaint, isGrocery }),
     qa: [
       { question: "Can I cut costs fast?", answer: "Reduce finish tier, keep critical safety items, and preserve a 10% buffer." },
       { question: "How exact are these quantities?", answer: "Treat as planning baseline; verify against field measurements before purchase." }

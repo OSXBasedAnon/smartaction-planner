@@ -69,6 +69,10 @@ export default function LandingPage() {
 
   const csvRows = useMemo(() => toCsvRows(csvInput), [csvInput]);
   const totalMaterial = useMemo(() => materials.reduce((acc, item) => acc + item.est_cost, 0), [materials]);
+  const remainingMaterialCost = useMemo(
+    () => materials.filter((item) => !item.checked).reduce((acc, item) => acc + item.est_cost, 0),
+    [materials]
+  );
   const totalToolCost = useMemo(
     () => tools.reduce((acc, item) => acc + (item.owned ? 0 : item.est_cost), 0),
     [tools]
@@ -163,12 +167,12 @@ export default function LandingPage() {
     const phaseTwo = blueprint?.phases[1]?.name ?? "Procure";
     const phaseThree = blueprint?.phases[2]?.name ?? "Execute";
     return [
-      { id: "d1", label: "Project Input", kind: "start" as const, x: 26, y: 78 },
-      { id: "d2", label: phaseOne, kind: "task" as const, x: 170, y: 24 },
-      { id: "d3", label: "Code + Safety Check", kind: "decision" as const, x: 338, y: 24 },
-      { id: "d4", label: phaseTwo, kind: "task" as const, x: 170, y: 132 },
-      { id: "d5", label: phaseThree, kind: "task" as const, x: 338, y: 132 },
-      { id: "d6", label: "Final QA", kind: "finish" as const, x: 506, y: 78 }
+      { id: "d1", label: "Project Input", kind: "start" as const, x: 20, y: 82 },
+      { id: "d2", label: phaseOne, kind: "task" as const, x: 150, y: 24 },
+      { id: "d3", label: "Code + Safety", kind: "decision" as const, x: 300, y: 24 },
+      { id: "d4", label: phaseTwo, kind: "task" as const, x: 300, y: 140 },
+      { id: "d5", label: phaseThree, kind: "task" as const, x: 450, y: 140 },
+      { id: "d6", label: "Final QA", kind: "finish" as const, x: 580, y: 82 }
     ];
   }, [blueprint]);
   const diagramNodeMap = useMemo(
@@ -178,8 +182,7 @@ export default function LandingPage() {
   const diagramEdges = [
     { from: "d1", to: "d2", label: "" },
     { from: "d2", to: "d3", label: "" },
-    { from: "d3", to: "d4", label: "approved" },
-    { from: "d3", to: "d2", label: "revise" },
+    { from: "d3", to: "d4", label: "pass" },
     { from: "d4", to: "d5", label: "" },
     { from: "d5", to: "d6", label: "" }
   ];
@@ -191,16 +194,15 @@ export default function LandingPage() {
       <section className="top-shell">
         <header className="top-bar">
           <div className="brand-lockup">
-            <img src="/logo.svg" alt="SupplyFlare logo" />
             <span>SupplyFlare</span>
+            <img src="/logo.svg" alt="SupplyFlare logo" />
           </div>
-          <img src="/logo.svg" alt="SupplyFlare mark" className="corner-logo" />
         </header>
 
         <div className="headline-wrap">
           <p className="eyebrow">Project Blueprint Agent</p>
           <h1>Type Any Project. Get a Smart Action Plan + Supply List.</h1>
-          <p className="subtle">Left: workflow, diagrams, tips. Right: editable Supply List and tool checklist.</p>
+          <p className="subtle">Project Blueprint Agent</p>
         </div>
 
         <div className="intake-grid">
@@ -293,7 +295,7 @@ export default function LandingPage() {
               <article className="panel-card">
                 <h3>Workflow Diagram</h3>
                 <div className="diagram-scroll">
-                  <svg viewBox="0 0 648 220" className="diagram-svg" role="img" aria-label="Workflow map">
+                  <svg viewBox="0 0 716 220" className="diagram-svg" role="img" aria-label="Workflow map">
                     <defs>
                       <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
                         <path d="M 0 0 L 8 4 L 0 8 z" fill="#2f6150" />
@@ -303,14 +305,14 @@ export default function LandingPage() {
                       const from = diagramNodeMap.get(edge.from);
                       const to = diagramNodeMap.get(edge.to);
                       if (!from || !to) return null;
-                      const x1 = from.x + 116;
+                      const x1 = from.x + 112;
                       const y1 = from.y + 28;
                       const x2 = to.x;
                       const y2 = to.y + 28;
-                      const c1x = x1 + 40;
-                      const c1y = y1 + (y2 > y1 ? 18 : -18);
-                      const c2x = x2 - 36;
-                      const c2y = y2 + (y1 > y2 ? 18 : -18);
+                      const c1x = x1 + (x2 - x1) * 0.33;
+                      const c1y = y1;
+                      const c2x = x1 + (x2 - x1) * 0.66;
+                      const c2y = y2;
                       return (
                         <g key={`${edge.from}-${edge.to}-${edge.label}`}>
                           <path
@@ -332,10 +334,10 @@ export default function LandingPage() {
                       const lines = labelLines(node.label);
                       return (
                         <g key={node.id}>
-                          <rect x={node.x} y={node.y} width={116} height={56} rx={16} fill={nodeColor(node.kind)} stroke="#7bb49c" />
-                          <text x={node.x + 58} y={node.y + 24} textAnchor="middle" className="diagram-label">
+                          <rect x={node.x} y={node.y} width={112} height={56} rx={16} fill={nodeColor(node.kind)} stroke="#7bb49c" />
+                          <text x={node.x + 56} y={node.y + 24} textAnchor="middle" className="diagram-label">
                             {lines.map((line, idx) => (
-                              <tspan key={line} x={node.x + 58} dy={idx === 0 ? 0 : 14}>
+                              <tspan key={line} x={node.x + 56} dy={idx === 0 ? 0 : 14}>
                                 {line}
                               </tspan>
                             ))}
@@ -500,6 +502,7 @@ export default function LandingPage() {
           <article className="rail-card total-card">
             <h3>Live Totals</h3>
             <p>Materials: {money(totalMaterial)}</p>
+            <p>Remaining materials cost: {money(remainingMaterialCost)}</p>
             <p>Tools (excluding owned): {money(totalToolCost)}</p>
             <p className="grand">Total Est: {money(totalMaterial + totalToolCost)}</p>
             {blueprint ? <p className="confidence">Plan confidence: {(blueprint.confidence * 100).toFixed(0)}%</p> : null}

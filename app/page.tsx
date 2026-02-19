@@ -1,283 +1,429 @@
 "use client";
 
-import Link from "next/link";
-import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
-import { QuoteResults } from "@/components/QuoteResults";
-import { RuntimeTimer } from "@/components/RuntimeTimer";
-import type { QuoteItemResult, SiteMatch } from "@/lib/types";
+import { useMemo, useRef, useState } from "react";
+import type { ProjectBlueprint } from "@/lib/project-blueprint";
 
-type StreamEvent =
-  | { type: "started"; run_id: string }
-  | { type: "match"; item_index: number; query: string; match: SiteMatch }
-  | { type: "item_done"; item_index: number; query: string; best?: { site: string; price: number; url: string } }
-  | { type: "done"; duration_ms: number }
-  | { type: "error"; message: string };
-
-type HistoryRun = {
-  id: string;
-  raw_input: string;
-  created_at: string;
-  status: string;
-  duration_ms: number | null;
+type PlanResponse = {
+  source: "gemini" | "fallback";
+  blueprint: ProjectBlueprint;
 };
 
-function rawInputFromRun(raw: string): string {
-  try {
-    const parsed = JSON.parse(raw) as Array<{ query?: string; qty?: number }>;
-    if (!Array.isArray(parsed)) return raw;
-    const lines = parsed
-      .map((item) => `${(item.query ?? "").trim()},${Number.isFinite(item.qty) && (item.qty ?? 0) > 0 ? item.qty : 1}`)
-      .filter((line) => !line.startsWith(","));
-    return lines.length > 0 ? lines.join("\n") : raw;
-  } catch {
-    return raw;
-  }
+type EditableMaterial = ProjectBlueprint["materials"][number] & { checked: boolean };
+type EditableTool = ProjectBlueprint["tools"][number];
+
+function money(value: number, currency = "USD"): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
 }
 
-function mergeMatch(results: QuoteItemResult[], itemIndex: number, query: string, match: SiteMatch): QuoteItemResult[] {
-  const next = [...results];
-  while (next.length <= itemIndex) next.push({ query, matches: [] });
-
-  const current = next[itemIndex];
-  current.query = query;
-  current.matches = [...current.matches, match];
-
-  const bestMatch = current.matches
-    .filter((entry) => entry.status === "ok" && typeof entry.price === "number" && entry.url)
-    .sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER))[0];
-
-  if (bestMatch?.price && bestMatch.url) {
-    current.best = { site: bestMatch.site, price: bestMatch.price, url: bestMatch.url };
-  }
-
-  return next;
-}
-
-function parseCsvLike(text: string): Array<{ query: string; qty: number }> {
-  return text
+function toCsvRows(csv: string): string[] {
+  return csv
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [query, qty] = line.split(",").map((part) => part.trim());
-      return { query, qty: Number.isFinite(Number(qty)) && Number(qty) > 0 ? Number(qty) : 1 };
-    })
-    .filter((item) => item.query.length > 0);
+    .filter((line) => line.length > 0)
+    .slice(0, 150);
 }
 
-function inferInputType(items: Array<{ query: string; qty: number }>): "text" | "sku" | "csv" {
-  if (items.length > 1) return "csv";
-  const q = items[0]?.query ?? "";
-  const skuLike = /^[a-zA-Z0-9\-_]{4,}$/.test(q) && !q.includes(" ");
-  return skuLike ? "sku" : "text";
+function inferComplexityLabel(level: ProjectBlueprint["complexity"]) {
+  if (level === "advanced") return "Advanced";
+  if (level === "moderate") return "Moderate";
+  return "Simple";
+}
+
+function nodeColor(kind: "start" | "task" | "decision" | "finish") {
+  if (kind === "start") return "var(--node-start)";
+  if (kind === "decision") return "var(--node-decision)";
+  if (kind === "finish") return "var(--node-finish)";
+  return "var(--node-task)";
+}
+
+function toMaterialRows(materials: ProjectBlueprint["materials"]): EditableMaterial[] {
+  return materials.map((item) => ({ ...item, checked: false }));
 }
 
 export default function LandingPage() {
-  const [rawInput, setRawInput] = useState("");
-  const [results, setResults] = useState<QuoteItemResult[]>([]);
-  const [running, setRunning] = useState(false);
-  const [duration, setDuration] = useState<number | undefined>(undefined);
+  const [projectInput, setProjectInput] = useState("rewire my basement with 8 outlets and better lighting");
+  const [csvInput, setCsvInput] = useState("");
+  const [budgetTarget, setBudgetTarget] = useState<string>("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [historyRuns, setHistoryRuns] = useState<HistoryRun[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [source, setSource] = useState<"gemini" | "fallback" | null>(null);
+  const [blueprint, setBlueprint] = useState<ProjectBlueprint | null>(null);
+  const [materials, setMaterials] = useState<EditableMaterial[]>([]);
+  const [tools, setTools] = useState<EditableTool[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const items = useMemo(() => parseCsvLike(rawInput), [rawInput]);
-  const inputType = useMemo(() => inferInputType(items), [items]);
+  const csvRows = useMemo(() => toCsvRows(csvInput), [csvInput]);
+  const totalMaterialLow = useMemo(() => materials.reduce((acc, item) => acc + item.est_cost_low, 0), [materials]);
+  const totalMaterialHigh = useMemo(() => materials.reduce((acc, item) => acc + item.est_cost_high, 0), [materials]);
+  const totalToolCost = useMemo(
+    () => tools.reduce((acc, item) => acc + (item.rent_or_buy === "rent" ? item.est_cost * 0.4 : item.est_cost), 0),
+    [tools]
+  );
+  const checkedCount = useMemo(() => materials.filter((item) => item.checked).length, [materials]);
 
-  useEffect(() => {
-    void (async () => {
-      const response = await fetch("/api/me-history", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as { logged_in: boolean; runs: HistoryRun[] };
-      setLoggedIn(data.logged_in);
-      setHistoryRuns(data.runs ?? []);
-    })();
-  }, []);
-
-  async function removeRun(runIdToDelete: string) {
-    const response = await fetch("/api/me-history", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ run_id: runIdToDelete })
-    });
-    if (!response.ok) return;
-    setHistoryRuns((prev) => prev.filter((run) => run.id !== runIdToDelete));
-  }
-
-  async function applyFile(file: File) {
-    const text = await file.text();
-    const parsed = parseCsvLike(text);
-    setRawInput(parsed.map((item) => `${item.query},${item.qty}`).join("\n"));
-  }
-
-  async function onDrop(event: DragEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const file = event.dataTransfer.files?.[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      setError("Please drop a CSV file.");
+  async function runPlan() {
+    const trimmed = projectInput.trim();
+    if (trimmed.length < 3) {
+      setError("Please enter a project goal first.");
       return;
     }
-    await applyFile(file);
-  }
 
-  async function runQuote() {
-    if (items.length === 0) return;
-
-    setRunning(true);
+    setLoading(true);
     setError(null);
-    setResults([]);
-    setDuration(undefined);
-    setRunId(null);
 
     try {
-      const response = await fetch("/api/run-quote", {
+      const response = await fetch("/api/project-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items, input_type: inputType })
+        body: JSON.stringify({
+          project_input: trimmed,
+          csv_input: csvInput,
+          budget_target: budgetTarget.length > 0 ? Number(budgetTarget) : undefined
+        })
       });
 
-      if (!response.ok || !response.body) {
-        throw new Error(`Run failed: ${response.status}`);
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(payload?.message ?? `Plan request failed (${response.status})`);
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        let newlineIndex = buffer.indexOf("\n");
-
-        while (newlineIndex !== -1) {
-          const line = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-
-          if (line.length > 0) {
-            const event: StreamEvent = JSON.parse(line);
-            if (event.type === "started") setRunId(event.run_id);
-            if (event.type === "match") setResults((prev) => mergeMatch(prev, event.item_index, event.query, event.match));
-            if (event.type === "item_done") {
-              setResults((prev) => {
-                const next = [...prev];
-                while (next.length <= event.item_index) next.push({ query: event.query, matches: [] });
-                if (event.best) {
-                  next[event.item_index].best = event.best;
-                }
-                return next;
-              });
-            }
-            if (event.type === "done") setDuration(event.duration_ms);
-            if (event.type === "error") setError(event.message);
-          }
-
-          newlineIndex = buffer.indexOf("\n");
-        }
-      }
-    } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "Unknown run error");
+      const data = (await response.json()) as PlanResponse;
+      setSource(data.source);
+      setBlueprint(data.blueprint);
+      setMaterials(toMaterialRows(data.blueprint.materials));
+      setTools(data.blueprint.tools);
+    } catch (planError) {
+      setError(planError instanceof Error ? planError.message : "Failed to generate plan.");
     } finally {
-      setRunning(false);
+      setLoading(false);
     }
   }
 
+  async function handleFile(file: File) {
+    const text = await file.text();
+    setCsvInput(text);
+  }
+
+  function updateMaterial(id: string, patch: Partial<EditableMaterial>) {
+    setMaterials((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  function updateTool(id: string, patch: Partial<EditableTool>) {
+    setTools((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  const chartMax = blueprint?.cost_breakdown.reduce((max, bucket) => Math.max(max, bucket.value), 1) ?? 1;
+
   return (
-    <main className="home-wrap">
-      <header className="home-nav">
-        <div className="row" style={{ gap: 10 }}>
-          {loggedIn ? (
-            <details className="history-menu">
-              <summary>History</summary>
-              <div className="history-dropdown">
-                {historyRuns.length === 0 ? <p className="small">No runs yet</p> : null}
-                {historyRuns.map((run) => (
-                  <div key={run.id} className="history-item">
-                    <button type="button" className="history-fill" onClick={() => setRawInput(rawInputFromRun(run.raw_input))} title="Load into search">
-                      <span>{run.raw_input.slice(0, 42)}</span>
-                      <span className="small">{run.status}</span>
-                    </button>
-                    <button type="button" className="history-delete" onClick={() => void removeRun(run.id)} aria-label="Delete run">
-                      X
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </details>
-          ) : (
-            <>
-              <Link href="/login">Login</Link>
-              <Link href="/signup">Sign up</Link>
-            </>
-          )}
-        </div>
-      </header>
+    <main className="planner-root">
+      <div className="hero-bg" />
 
-      <section className="search-shell no-card">
-        <div className="brand-row">
-          <h1>SupplyFlare</h1>
-          <img src="/logo.svg" alt="SupplyFlare logo" className="brand-logo" />
-          <span className="beta-badge">beta</span>
+      <section className="top-shell">
+        <header className="top-bar">
+          <div>
+            <p className="eyebrow">SupplyFlare Project Agent</p>
+            <h1>Turn Any Idea Into a DIY Blueprint</h1>
+            <p className="subtle">Describe any project, paste CSVs, and get a live workflow + editable shopping list.</p>
+          </div>
+          <div className="status-chip">{source ? `Model: ${source}` : "Ready"}</div>
+        </header>
+
+        <div className="intake-grid">
+          <label className="field">
+            <span>Project Goal</span>
+            <textarea
+              value={projectInput}
+              onChange={(event) => setProjectInput(event.target.value)}
+              placeholder="Example: remodel kitchen with budget finishes and keep existing plumbing footprint"
+            />
+          </label>
+
+          <label className="field">
+            <span>CSV / Existing List (optional)</span>
+            <textarea
+              value={csvInput}
+              onChange={(event) => setCsvInput(event.target.value)}
+              placeholder="item,qty,notes"
+            />
+          </label>
         </div>
 
-        <form
-          className="search-line"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void runQuote();
-          }}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={onDrop}
-        >
-          <input
-            value={rawInput}
-            onChange={(event) => setRawInput(event.target.value)}
-            placeholder="Type anything or drop a CSV"
-            aria-label="Search input"
-          />
-          <button
-            type="button"
-            className="attach-btn"
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach CSV"
-            aria-label="Attach CSV"
-          >
-            +CSV
+        <div className="controls-row">
+          <label className="budget-pill">
+            Budget Target
+            <input
+              value={budgetTarget}
+              onChange={(event) => setBudgetTarget(event.target.value.replace(/[^\d.]/g, ""))}
+              placeholder="1500"
+              inputMode="decimal"
+            />
+          </label>
+          <button type="button" className="ghost-btn" onClick={() => fileRef.current?.click()}>
+            Upload CSV
           </button>
           <input
-            ref={fileInputRef}
+            ref={fileRef}
             type="file"
             accept=".csv,text/csv"
             style={{ display: "none" }}
             onChange={async (event) => {
               const file = event.target.files?.[0];
               if (!file) return;
-              await applyFile(file);
+              await handleFile(file);
             }}
           />
-          <button type="submit" className="search-btn" disabled={running || items.length === 0}>
-            Search
+          <button type="button" className="primary-btn" onClick={() => void runPlan()} disabled={loading}>
+            {loading ? "Building Blueprint..." : "Generate Blueprint"}
           </button>
-        </form>
-
-        <div className="row" style={{ justifyContent: "center", marginTop: 10 }}>
-          <RuntimeTimer running={running} finishedDurationMs={duration} />
         </div>
 
-        {error ? <p className="error">{error}</p> : null}
+        {error ? <p className="error-line">{error}</p> : null}
+        {csvRows.length > 0 ? <p className="meta-line">{csvRows.length} CSV rows attached for agentic inference.</p> : null}
       </section>
 
-      <section className="container results-flat" style={{ marginTop: 14 }}>
-        <QuoteResults results={results} runId={runId} />
-      </section>
+      <section className="workspace">
+        <div className="left-pane">
+          {!blueprint ? (
+            <article className="panel-card empty-card">
+              <h2>What you get</h2>
+              <ul>
+                <li>Sequenced workflow with checkpoints and warnings</li>
+                <li>Visual flow map for action order</li>
+                <li>Editable materials and tool list with budget ranges</li>
+                <li>Agent fill-ins for unknown gaps</li>
+              </ul>
+            </article>
+          ) : (
+            <>
+              <article className="panel-card summary-card">
+                <div className="row-split">
+                  <div>
+                    <p className="eyebrow">Blueprint</p>
+                    <h2>{blueprint.title}</h2>
+                    <p>{blueprint.objective}</p>
+                  </div>
+                  <div className="badge-stack">
+                    <span>{inferComplexityLabel(blueprint.complexity)}</span>
+                    <span>{money(blueprint.budget.low, blueprint.budget.currency)} - {money(blueprint.budget.high, blueprint.budget.currency)}</span>
+                    <span>{blueprint.timeline.total_estimated_hours}h estimate</span>
+                  </div>
+                </div>
+                <div className="chips">
+                  {blueprint.assumptions.map((assumption) => (
+                    <span key={assumption} className="chip">{assumption}</span>
+                  ))}
+                </div>
+              </article>
 
-      <section className="container meta-strip">
-        <p className="small">Pricing may exclude shipping/tax. Site availability can be partial.</p>
-        {runId ? <p className="small">Run ID: {runId}</p> : null}
+              <article className="panel-card">
+                <h3>Workflow Diagram</h3>
+                <div className="diagram-scroll">
+                  <svg viewBox="0 0 920 180" className="diagram-svg" role="img" aria-label="Workflow map">
+                    {blueprint.diagram.nodes.map((node, index) => {
+                      const x = 70 + index * 170;
+                      const y = 90;
+                      return (
+                        <g key={node.id}>
+                          <rect x={x} y={y - 30} width={140} height={60} rx={18} fill={nodeColor(node.kind)} />
+                          <text x={x + 70} y={y + 4} textAnchor="middle" className="diagram-label">
+                            {node.label.slice(0, 18)}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    {blueprint.diagram.edges.map((edge) => {
+                      const fromIndex = blueprint.diagram.nodes.findIndex((node) => node.id === edge.from);
+                      const toIndex = blueprint.diagram.nodes.findIndex((node) => node.id === edge.to);
+                      if (fromIndex < 0 || toIndex < 0) return null;
+                      const x1 = 70 + fromIndex * 170 + 140;
+                      const x2 = 70 + toIndex * 170;
+                      return (
+                        <g key={`${edge.from}-${edge.to}-${edge.label}`}>
+                          <line x1={x1} y1={90} x2={x2} y2={90} stroke="var(--line)" strokeWidth="3" />
+                          {edge.label ? (
+                            <text x={(x1 + x2) / 2} y={74} textAnchor="middle" className="diagram-edge">
+                              {edge.label}
+                            </text>
+                          ) : null}
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+              </article>
+
+              <article className="panel-card">
+                <h3>Step Workflow</h3>
+                <div className="phase-list">
+                  {blueprint.phases.map((phase) => (
+                    <section key={phase.id} className="phase-card">
+                      <div className="row-split">
+                        <h4>{phase.name}</h4>
+                        <span>{phase.duration_hours}h</span>
+                      </div>
+                      <p>{phase.goal}</p>
+                      {phase.steps.map((step) => (
+                        <article key={step.id} className="step-row">
+                          <strong>{step.title}</strong>
+                          <p>{step.details}</p>
+                          <p className="muted">Checkpoint: {step.checkpoint}</p>
+                          {step.warning ? <p className="warn">Warning: {step.warning}</p> : null}
+                        </article>
+                      ))}
+                    </section>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel-card dual-grid">
+                <div>
+                  <h3>Cost Split</h3>
+                  <div className="bars">
+                    {blueprint.cost_breakdown.map((bucket) => (
+                      <div key={bucket.label} className="bar-row">
+                        <span>{bucket.label}</span>
+                        <div className="bar-track">
+                          <div className="bar-fill" style={{ width: `${Math.max(8, (bucket.value / chartMax) * 100)}%` }} />
+                        </div>
+                        <span>{money(bucket.value, blueprint.budget.currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <h3>Field Tips</h3>
+                  <div className="tip-list">
+                    {blueprint.tips.map((tip) => (
+                      <article key={tip.id} className="tip-card">
+                        <strong>{tip.title}</strong>
+                        <p>{tip.detail}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </article>
+
+              <article className="panel-card dual-grid">
+                <div>
+                  <h3>Safety Notes</h3>
+                  <ul className="basic-list">
+                    {blueprint.safety_notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <h3>Agent Fill-ins</h3>
+                  <ul className="basic-list">
+                    {blueprint.agent_fill_ins.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </article>
+            </>
+          )}
+        </div>
+
+        <aside className="right-pane">
+          <article className="rail-card">
+            <div className="row-split">
+              <h3>Materials List</h3>
+              <span>{checkedCount}/{materials.length} checked</span>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Done</th>
+                    <th>Item</th>
+                    <th>Qty</th>
+                    <th>Low</th>
+                    <th>High</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {materials.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <input type="checkbox" checked={item.checked} onChange={(event) => updateMaterial(item.id, { checked: event.target.checked })} />
+                      </td>
+                      <td>
+                        <input value={item.name} onChange={(event) => updateMaterial(item.id, { name: event.target.value })} />
+                        <small>{item.spec}</small>
+                      </td>
+                      <td>
+                        <input
+                          value={item.qty}
+                          inputMode="decimal"
+                          onChange={(event) => updateMaterial(item.id, { qty: Number(event.target.value || "0") })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          value={item.est_cost_low}
+                          inputMode="decimal"
+                          onChange={(event) => updateMaterial(item.id, { est_cost_low: Number(event.target.value || "0") })}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          value={item.est_cost_high}
+                          inputMode="decimal"
+                          onChange={(event) => updateMaterial(item.id, { est_cost_high: Number(event.target.value || "0") })}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article className="rail-card">
+            <h3>Tools</h3>
+            <div className="tool-list">
+              {tools.map((tool) => (
+                <div className="tool-row" key={tool.id}>
+                  <input type="text" value={tool.name} onChange={(event) => updateTool(tool.id, { name: event.target.value })} />
+                  <select value={tool.rent_or_buy} onChange={(event) => updateTool(tool.id, { rent_or_buy: event.target.value as EditableTool["rent_or_buy"] })}>
+                    <option value="own">Own</option>
+                    <option value="rent">Rent</option>
+                    <option value="buy">Buy</option>
+                  </select>
+                  <input
+                    value={tool.est_cost}
+                    inputMode="decimal"
+                    onChange={(event) => updateTool(tool.id, { est_cost: Number(event.target.value || "0") })}
+                  />
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article className="rail-card total-card">
+            <h3>Live Totals</h3>
+            <p>Materials: {money(totalMaterialLow)} - {money(totalMaterialHigh)}</p>
+            <p>Tools: {money(totalToolCost)}</p>
+            <p className="grand">
+              Total: {money(totalMaterialLow + totalToolCost)} - {money(totalMaterialHigh + totalToolCost)}
+            </p>
+            {blueprint ? <p className="confidence">Plan confidence: {(blueprint.confidence * 100).toFixed(0)}%</p> : null}
+          </article>
+
+          {blueprint ? (
+            <article className="rail-card">
+              <h3>Common Questions</h3>
+              {blueprint.qa.map((item) => (
+                <details key={item.question}>
+                  <summary>{item.question}</summary>
+                  <p>{item.answer}</p>
+                </details>
+              ))}
+            </article>
+          ) : null}
+        </aside>
       </section>
     </main>
   );

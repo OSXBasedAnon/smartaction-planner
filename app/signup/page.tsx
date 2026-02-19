@@ -40,14 +40,14 @@ export default function SignupPage() {
         <aside className="auth-side">
           <p className="auth-kicker">SupplyFlare</p>
           <h1>Create your account</h1>
-          <p className="small">Join to keep quote history, capture team workflows, and improve site ranking through usage signals.</p>
+          <p className="small">Create an account to save blueprints, material lists, and project revisions.</p>
           <ul className="auth-list">
             <li>Secure email/password auth</li>
-            <li>Private run history</li>
-            <li>Continuous model + catalog improvements</li>
+            <li>Private project workspace</li>
+            <li>Persistent plan library</li>
           </ul>
           <Link href="/" className="small auth-home">
-            Back to search
+            Back to planner
           </Link>
         </aside>
 
@@ -69,7 +69,7 @@ export default function SignupPage() {
                 {show ? "Hide" : "Show"}
               </button>
             </div>
-            <button type="submit" className="search-btn auth-submit">
+            <button type="submit" className="primary-btn auth-submit">
               Sign up
             </button>
             {error ? <p className="error">{error}</p> : null}

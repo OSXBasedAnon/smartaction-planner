@@ -8,14 +8,13 @@ export async function GET(request: Request) {
   }
 
   const origin = process.env.APP_BASE_URL ?? new URL(request.url).origin;
-  const response = await fetch(`${origin}/api/quote`, {
+  const response = await fetch(`${origin}/api/project-plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      items: [{ query: "paper towels 2 ply", qty: 1 }],
-      category: "office",
-      site_plan: ["staples", "amazon_business"],
-      options: { cache_ttl: 0 }
+      project_input: "build a simple garage storage shelf",
+      csv_input: "item,qty\n2x4 studs,8\nplywood sheet,2",
+      budget_target: 400
     })
   });
 
@@ -24,5 +23,7 @@ export async function GET(request: Request) {
   }
 
   const json = await response.json();
-  return NextResponse.json({ ok: true, run_id: json.run_id, duration_ms: json.duration_ms });
+  const title = json?.blueprint?.title ?? "unknown";
+  const phaseCount = Array.isArray(json?.blueprint?.phases) ? json.blueprint.phases.length : 0;
+  return NextResponse.json({ ok: true, source: json?.source ?? "unknown", title, phase_count: phaseCount });
 }

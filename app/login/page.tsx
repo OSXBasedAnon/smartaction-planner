@@ -31,14 +31,14 @@ export default function LoginPage() {
         <aside className="auth-side">
           <p className="auth-kicker">SupplyFlare</p>
           <h1>Welcome back</h1>
-          <p className="small">Sign in to unlock saved runs, faster reruns, and adaptive site ranking based on your usage.</p>
+          <p className="small">Sign in to save project blueprints, materials plans, and revision history.</p>
           <ul className="auth-list">
-            <li>Saved quote history</li>
-            <li>One-click rerun inputs</li>
-            <li>Performance-learning site ranking</li>
+            <li>Saved project blueprints</li>
+            <li>Editable item lists and revisions</li>
+            <li>Reusable plans for repeat jobs</li>
           </ul>
           <Link href="/" className="small auth-home">
-            Back to search
+            Back to planner
           </Link>
         </aside>
 
@@ -59,7 +59,7 @@ export default function LoginPage() {
                 {show ? "Hide" : "Show"}
               </button>
             </div>
-            <button type="submit" className="search-btn auth-submit">
+            <button type="submit" className="primary-btn auth-submit">
               Log in
             </button>
             {error ? <p className="error">{error}</p> : null}

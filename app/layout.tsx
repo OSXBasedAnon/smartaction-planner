@@ -1,22 +1,29 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import { Outfit } from "next/font/google";
+import { Sora, Space_Grotesk } from "next/font/google";
 
-const outfit = Outfit({
+const sora = Sora({
   subsets: ["latin"],
   display: "swap",
-  weight: ["400", "500", "700"]
+  weight: ["400", "600", "700"]
+});
+
+const space = Space_Grotesk({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-space",
+  weight: ["500", "700"]
 });
 
 export const metadata: Metadata = {
-  title: "SupplyFlare",
-  description: "Fast multi-vendor quote engine"
+  title: "SupplyFlare Blueprint Agent",
+  description: "Turn any project idea into a practical DIY workflow, editable materials list, and cost plan."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={outfit.className}>{children}</body>
+      <body className={`${sora.className} ${space.variable}`}>{children}</body>
     </html>
   );
 }

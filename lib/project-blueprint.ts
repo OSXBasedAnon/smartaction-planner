@@ -43,8 +43,7 @@ const materialSchema = z.object({
   unit: z.string().min(1),
   category: z.string().min(1),
   priority: z.enum(["critical", "recommended", "optional"]),
-  est_cost_low: z.number().nonnegative(),
-  est_cost_high: z.number().nonnegative(),
+  est_cost: z.number().nonnegative(),
   notes: z.string().optional().default(""),
   alternatives: z.array(z.string()).default([])
 });
@@ -53,8 +52,6 @@ const toolSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   purpose: z.string().min(1),
-  owned: z.boolean().default(false),
-  rent_or_buy: z.enum(["own", "rent", "buy"]),
   est_cost: z.number().nonnegative()
 });
 
@@ -113,24 +110,292 @@ function csvRows(csv: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .slice(0, 100);
+    .slice(0, 120);
+}
+
+function includesAny(text: string, words: string[]): boolean {
+  return words.some((word) => text.includes(word));
+}
+
+function slug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+}
+
+function materialExists(materials: ProjectBlueprint["materials"], probes: string[]): boolean {
+  return materials.some((item) => {
+    const hay = `${item.name} ${item.spec}`.toLowerCase();
+    return probes.some((probe) => hay.includes(probe));
+  });
+}
+
+function addMaterialIfMissing(
+  materials: ProjectBlueprint["materials"],
+  candidate: ProjectBlueprint["materials"][number],
+  probes: string[]
+): ProjectBlueprint["materials"] {
+  if (materialExists(materials, probes)) return materials;
+  return [...materials, candidate];
+}
+
+function normalizeBudget(blueprint: ProjectBlueprint): ProjectBlueprint {
+  const materialTotal = blueprint.materials.reduce((acc, item) => acc + item.est_cost, 0);
+  const toolTotal = blueprint.tools.reduce((acc, item) => acc + item.est_cost, 0);
+  const low = Math.round(materialTotal + toolTotal * 0.45);
+  const high = Math.round(materialTotal * 1.3 + toolTotal);
+  const mid = Math.round((low + high) / 2);
+
+  return {
+    ...blueprint,
+    budget: {
+      currency: blueprint.budget.currency || "USD",
+      low,
+      mid,
+      high
+    },
+    cost_breakdown: [
+      { label: "Materials", value: Math.round(materialTotal) },
+      { label: "Tools", value: Math.round(toolTotal) },
+      { label: "Buffer", value: Math.round(Math.max(40, high - materialTotal - toolTotal)) }
+    ]
+  };
+}
+
+function baselineDiagram(): ProjectBlueprint["diagram"] {
+  return {
+    nodes: [
+      { id: "d_start", label: "Project intake", kind: "start" },
+      { id: "d_scope", label: "Scope and measurements", kind: "task" },
+      { id: "d_procure", label: "Material and tool prep", kind: "task" },
+      { id: "d_gate", label: "Safety + code checkpoint", kind: "decision" },
+      { id: "d_execute", label: "Execute build steps", kind: "task" },
+      { id: "d_finish", label: "Final QA + closeout", kind: "finish" }
+    ],
+    edges: [
+      { from: "d_start", to: "d_scope", label: "" },
+      { from: "d_scope", to: "d_procure", label: "" },
+      { from: "d_procure", to: "d_gate", label: "ready?" },
+      { from: "d_gate", to: "d_execute", label: "yes" },
+      { from: "d_gate", to: "d_scope", label: "fix scope" },
+      { from: "d_execute", to: "d_finish", label: "" }
+    ]
+  };
+}
+
+export function ensureBlueprintCoverage(projectInput: string, blueprint: ProjectBlueprint): ProjectBlueprint {
+  const lower = projectInput.toLowerCase();
+  let materials = [...blueprint.materials];
+  let tools = [...blueprint.tools];
+  const fillIns = [...blueprint.agent_fill_ins];
+
+  const isElectrical = includesAny(lower, ["rewire", "electrical", "outlet", "circuit", "panel", "lighting", "basement"]);
+  const isKitchen = includesAny(lower, ["kitchen", "cabinet", "counter", "backsplash", "sink", "remodel"]);
+  const isGrocery = includesAny(lower, ["grocery", "meal", "pantry", "food list", "shopping list"]);
+
+  if (isElectrical) {
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_light_fixtures",
+        name: "LED light fixtures",
+        spec: "Ceiling fixtures or can lights, damp-rated if needed",
+        qty: 6,
+        unit: "pcs",
+        category: "lighting",
+        priority: "critical",
+        est_cost: 210,
+        notes: "Target lumen output by room zone.",
+        alternatives: ["LED wafer lights", "Surface-mount fixtures"]
+      },
+      ["light fixture", "can light", "led light", "wafer"]
+    );
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_switches",
+        name: "Light switches and plates",
+        spec: "Single pole / 3-way as required",
+        qty: 6,
+        unit: "pcs",
+        category: "devices",
+        priority: "recommended",
+        est_cost: 55,
+        notes: "Match gang box count and control layout.",
+        alternatives: ["Smart switches"]
+      },
+      ["switch", "plate"]
+    );
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_breakers",
+        name: "Compatible breakers",
+        spec: "Panel-matching breakers for new circuits",
+        qty: 3,
+        unit: "pcs",
+        category: "panel",
+        priority: "critical",
+        est_cost: 72,
+        notes: "Must match panel brand and rating.",
+        alternatives: []
+      },
+      ["breaker"]
+    );
+    tools = tools.some((tool) => /voltage|multimeter|tester/i.test(`${tool.name} ${tool.purpose}`))
+      ? tools
+      : [
+          ...tools,
+          {
+            id: "t_voltage_tester",
+            name: "Non-contact voltage tester",
+            purpose: "Verify circuits are de-energized before touching wiring.",
+            est_cost: 26
+          }
+        ];
+    fillIns.push("Added missing lighting and electrical safety essentials based on project intent.");
+  }
+
+  if (isKitchen) {
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_cabinets",
+        name: "Cabinets or cabinet hardware",
+        spec: "Base/wall cabinet set or refresh hardware set",
+        qty: 1,
+        unit: "set",
+        category: "cabinetry",
+        priority: "critical",
+        est_cost: 2400,
+        notes: "Adjust for full replacement vs refresh.",
+        alternatives: ["Refacing kit", "Paint + hardware update"]
+      },
+      ["cabinet", "drawer", "hardware"]
+    );
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_countertop",
+        name: "Countertop material",
+        spec: "Laminate / butcher block / quartz option",
+        qty: 30,
+        unit: "sqft",
+        category: "surface",
+        priority: "recommended",
+        est_cost: 1450,
+        notes: "Template after cabinet alignment.",
+        alternatives: ["Prefabricated laminate top"]
+      },
+      ["counter", "countertop"]
+    );
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_sink_faucet",
+        name: "Sink + faucet set",
+        spec: "Single or double bowl with matching faucet",
+        qty: 1,
+        unit: "set",
+        category: "plumbing",
+        priority: "recommended",
+        est_cost: 320,
+        notes: "Confirm cutout and plumbing compatibility.",
+        alternatives: ["Drop-in sink with basic faucet"]
+      },
+      ["sink", "faucet"]
+    );
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_backsplash",
+        name: "Backsplash tile and adhesive",
+        spec: "Tile, mortar/mastic, grout, spacers",
+        qty: 1,
+        unit: "set",
+        category: "finish",
+        priority: "optional",
+        est_cost: 290,
+        notes: "Usually installed after countertop set.",
+        alternatives: ["Peel-and-stick backsplash panels"]
+      },
+      ["backsplash", "tile", "grout"]
+    );
+    fillIns.push("Added core kitchen scope items: cabinetry, countertop, sink/faucet, and backsplash.");
+  }
+
+  if (isGrocery) {
+    materials = addMaterialIfMissing(
+      materials,
+      {
+        id: "m_pantry_base",
+        name: "Pantry staples",
+        spec: "Rice/pasta/beans/oil/salt basics",
+        qty: 1,
+        unit: "set",
+        category: "pantry",
+        priority: "critical",
+        est_cost: 48,
+        notes: "Buy bulk for long shelf life.",
+        alternatives: []
+      },
+      ["pantry", "rice", "pasta", "beans"]
+    );
+    fillIns.push("Added pantry baseline to reduce missing essentials.");
+  }
+
+  const normalizedMaterials = materials
+    .map((item, index) => ({
+      ...item,
+      id: item.id?.trim().length > 0 ? item.id : `m_${slug(item.name)}_${index + 1}`,
+      name: item.name.trim(),
+      spec: item.spec.trim(),
+      est_cost: Number.isFinite(item.est_cost) ? Math.max(0, Math.round(item.est_cost)) : 0
+    }))
+    .filter((item) => item.name.length > 0);
+
+  const normalizedTools = tools
+    .map((item, index) => ({
+      ...item,
+      id: item.id?.trim().length > 0 ? item.id : `t_${slug(item.name)}_${index + 1}`,
+      name: item.name.trim(),
+      purpose: item.purpose.trim(),
+      est_cost: Number.isFinite(item.est_cost) ? Math.max(0, Math.round(item.est_cost)) : 0
+    }))
+    .filter((item) => item.name.length > 0);
+
+  const normalized = {
+    ...blueprint,
+    materials: normalizedMaterials,
+    tools: normalizedTools,
+    agent_fill_ins: [...new Set(fillIns.filter((entry) => entry.trim().length > 0))],
+    diagram:
+      blueprint.diagram.nodes.length >= 4 && blueprint.diagram.edges.length >= 3
+        ? blueprint.diagram
+        : baselineDiagram()
+  };
+
+  return normalizeBudget(normalized);
 }
 
 export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
   const rows = csvRows(input.csv_input ?? "");
   const normalized = input.project_input.trim();
-  const isKitchen = /kitchen|cabinet|counter|sink|backsplash/i.test(normalized);
-  const isElectrical = /rewire|breaker|panel|outlet|circuit|electrical/i.test(normalized);
-  const isGrocery = /grocery|meal|food|shopping list|pantry/i.test(normalized);
+  const lower = normalized.toLowerCase();
+  const isKitchen = includesAny(lower, ["kitchen", "cabinet", "counter", "sink", "backsplash"]);
+  const isElectrical = includesAny(lower, ["rewire", "breaker", "panel", "outlet", "circuit", "electrical", "lighting"]);
+  const isGrocery = includesAny(lower, ["grocery", "meal", "food", "shopping list", "pantry"]);
   const contextTitle = isKitchen
-    ? "Kitchen Remodel Starter Plan"
+    ? "Kitchen Remodel Blueprint"
     : isElectrical
-      ? "Basement Rewire Starter Plan"
+      ? "Basement Rewire and Lighting Blueprint"
       : isGrocery
         ? "Smart Grocery Planning Blueprint"
         : "DIY Project Blueprint";
 
-  const materials = isGrocery
+  const materials: ProjectBlueprint["materials"] = isGrocery
     ? [
         {
           id: "m1",
@@ -139,9 +404,8 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
           qty: 1,
           unit: "set",
           category: "produce",
-          priority: "critical" as const,
-          est_cost_low: 30,
-          est_cost_high: 55,
+          priority: "critical",
+          est_cost: 44,
           notes: "Split by meals for less spoilage.",
           alternatives: ["Frozen vegetables"]
         },
@@ -152,189 +416,280 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
           qty: 1,
           unit: "set",
           category: "protein",
-          priority: "critical" as const,
-          est_cost_low: 35,
-          est_cost_high: 85,
+          priority: "critical",
+          est_cost: 62,
           notes: "Pick 3 rotating options for variety.",
           alternatives: ["Canned tuna", "Lentils"]
-        }
-      ]
-    : [
-        {
-          id: "m1",
-          name: isElectrical ? "12/2 Romex cable" : "Framing lumber",
-          spec: isElectrical ? "Copper NM-B, indoor rated" : "2x4 kiln-dried studs",
-          qty: isElectrical ? 250 : 24,
-          unit: isElectrical ? "ft" : "pcs",
-          category: isElectrical ? "electrical" : "build",
-          priority: "critical" as const,
-          est_cost_low: isElectrical ? 145 : 110,
-          est_cost_high: isElectrical ? 260 : 210,
-          notes: "Adjust quantity after final measurements.",
-          alternatives: isElectrical ? ["14/2 for lighting runs"] : ["2x3 for non-load framing"]
         },
         {
-          id: "m2",
-          name: isElectrical ? "20A outlets + boxes" : "Drywall sheets",
-          spec: isElectrical ? "Tamper-resistant duplex, old-work boxes" : "1/2 inch gypsum board",
-          qty: isElectrical ? 10 : 18,
-          unit: "pcs",
-          category: isElectrical ? "devices" : "finish",
-          priority: "recommended" as const,
-          est_cost_low: isElectrical ? 65 : 150,
-          est_cost_high: isElectrical ? 140 : 280,
-          notes: "Include 10% overage for breakage.",
-          alternatives: isElectrical ? ["AFCI/GFCI where required"] : ["Moisture resistant board"]
+          id: "m3",
+          name: "Pantry staples",
+          spec: "Rice, pasta, oil, seasoning basics",
+          qty: 1,
+          unit: "set",
+          category: "pantry",
+          priority: "recommended",
+          est_cost: 38,
+          notes: "Refill shelf-stable base ingredients.",
+          alternatives: []
         }
-      ];
+      ]
+    : isKitchen
+      ? [
+          {
+            id: "m1",
+            name: "Cabinetry or hardware set",
+            spec: "Cabinets or refresh hardware kit",
+            qty: 1,
+            unit: "set",
+            category: "cabinetry",
+            priority: "critical",
+            est_cost: 2400,
+            notes: "Scope based on full replacement vs refresh.",
+            alternatives: ["Cabinet refacing"]
+          },
+          {
+            id: "m2",
+            name: "Countertop material",
+            spec: "Laminate, butcher block, or stone option",
+            qty: 30,
+            unit: "sqft",
+            category: "surface",
+            priority: "recommended",
+            est_cost: 1450,
+            notes: "Measure after cabinet plan is locked.",
+            alternatives: ["Prefabricated laminate top"]
+          },
+          {
+            id: "m3",
+            name: "Sink + faucet set",
+            spec: "Kitchen sink with matching faucet",
+            qty: 1,
+            unit: "set",
+            category: "plumbing",
+            priority: "recommended",
+            est_cost: 320,
+            notes: "Confirm cutout size and drain alignment.",
+            alternatives: ["Drop-in sink set"]
+          },
+          {
+            id: "m4",
+            name: "Backsplash system",
+            spec: "Tile, adhesive, grout, spacers",
+            qty: 1,
+            unit: "set",
+            category: "finish",
+            priority: "optional",
+            est_cost: 280,
+            notes: "Install after countertop.",
+            alternatives: ["Peel-and-stick panels"]
+          },
+          {
+            id: "m5",
+            name: "Paint and prep supplies",
+            spec: "Primer, paint, rollers, masking materials",
+            qty: 1,
+            unit: "set",
+            category: "finish",
+            priority: "optional",
+            est_cost: 190,
+            notes: "Needed for wall or cabinet refresh.",
+            alternatives: []
+          }
+        ]
+      : [
+          {
+            id: "m1",
+            name: "12/2 NM-B cable",
+            spec: "Copper branch circuit cable",
+            qty: 300,
+            unit: "ft",
+            category: "electrical",
+            priority: "critical",
+            est_cost: 210,
+            notes: "Adjust quantity after route plan.",
+            alternatives: ["14/2 for lighting-only circuits"]
+          },
+          {
+            id: "m2",
+            name: "Outlets + old-work boxes",
+            spec: "Tamper-resistant receptacles and boxes",
+            qty: 8,
+            unit: "sets",
+            category: "devices",
+            priority: "critical",
+            est_cost: 118,
+            notes: "Target: 8 outlets from prompt.",
+            alternatives: ["AFCI/GFCI combo outlets"]
+          },
+          {
+            id: "m3",
+            name: "LED lighting fixtures",
+            spec: "Ceiling fixtures/can lights for basement",
+            qty: 6,
+            unit: "pcs",
+            category: "lighting",
+            priority: "critical",
+            est_cost: 210,
+            notes: "Included because user requested better lighting.",
+            alternatives: ["LED wafer lights"]
+          },
+          {
+            id: "m4",
+            name: "Switches and wall plates",
+            spec: "Single pole and 3-way as needed",
+            qty: 6,
+            unit: "pcs",
+            category: "devices",
+            priority: "recommended",
+            est_cost: 55,
+            notes: "Map switch location before pulling cable.",
+            alternatives: ["Smart dimmer switches"]
+          },
+          {
+            id: "m5",
+            name: "Panel-compatible breakers",
+            spec: "Circuit breakers matching existing panel",
+            qty: 3,
+            unit: "pcs",
+            category: "panel",
+            priority: "critical",
+            est_cost: 72,
+            notes: "Verify panel make/model first.",
+            alternatives: []
+          }
+        ];
 
-  const tools = isGrocery
+  const tools: ProjectBlueprint["tools"] = isGrocery
     ? [
-        { id: "t1", name: "Meal prep containers", purpose: "Batch prep and store meals", owned: false, rent_or_buy: "buy" as const, est_cost: 18 },
-        { id: "t2", name: "Digital kitchen scale", purpose: "Portion control and consistency", owned: false, rent_or_buy: "buy" as const, est_cost: 24 }
+        { id: "t1", name: "Meal prep containers", purpose: "Store batch-cooked meals", est_cost: 18 },
+        { id: "t2", name: "Kitchen scale", purpose: "Portion and recipe consistency", est_cost: 24 }
       ]
     : [
-        { id: "t1", name: "Tape measure", purpose: "Room and run measurements", owned: false, rent_or_buy: "buy" as const, est_cost: 12 },
-        { id: "t2", name: isElectrical ? "Wire stripper" : "Circular saw", purpose: isElectrical ? "Clean wire prep" : "Cut framing material", owned: false, rent_or_buy: "buy" as const, est_cost: isElectrical ? 25 : 89 },
-        { id: "t3", name: "Drill driver", purpose: "Fastening and assembly", owned: false, rent_or_buy: "rent" as const, est_cost: 35 }
+        { id: "t1", name: "Tape measure", purpose: "Capture accurate dimensions and runs", est_cost: 12 },
+        { id: "t2", name: isElectrical ? "Wire stripper/cutter" : "Circular saw", purpose: isElectrical ? "Strip and prep conductors safely" : "Cut lumber and panel materials", est_cost: isElectrical ? 25 : 95 },
+        { id: "t3", name: "Drill driver", purpose: "Fastening, anchors, and assembly", est_cost: 85 },
+        ...(isElectrical
+          ? [{ id: "t4", name: "Voltage tester", purpose: "Confirm circuits are de-energized", est_cost: 26 }]
+          : [])
       ];
 
-  const low = materials.reduce((acc, item) => acc + item.est_cost_low, 0) + tools.reduce((acc, item) => acc + item.est_cost * 0.4, 0);
-  const high = materials.reduce((acc, item) => acc + item.est_cost_high, 0) + tools.reduce((acc, item) => acc + item.est_cost, 0);
-  const mid = Math.round((low + high) / 2);
-
-  return {
+  const base: ProjectBlueprint = {
     title: contextTitle,
     objective: `Plan and execute: ${normalized}`,
-    complexity: rows.length > 30 ? "advanced" : rows.length > 10 ? "moderate" : "simple",
+    complexity: rows.length > 35 ? "advanced" : rows.length > 12 ? "moderate" : "simple",
     assumptions: [
-      "Local building code and permit rules vary by city.",
-      "Pricing is estimate-only and should be validated in-store.",
-      "Quantities include a small waste factor."
+      "Local code, permit, and inspection requirements vary by jurisdiction.",
+      "Pricing is estimate-only and may vary by region and quality tier.",
+      "Material quantities include a small waste allowance."
     ],
     safety_notes: isElectrical
-      ? ["Turn off breaker and verify zero voltage before work.", "Use correct gauge and breaker pairing.", "When in doubt, involve a licensed electrician."]
-      : ["Use eye and hearing protection.", "Confirm wall utility lines before cutting.", "Keep workspace ventilated and clean."],
+      ? ["Turn off breakers and verify zero voltage before touching conductors.", "Use correct wire gauge and breaker sizing.", "Use licensed electrician support when scope exceeds comfort."]
+      : ["Use PPE (gloves/eye/ear protection) throughout active work.", "Confirm hidden utilities before cutting/drilling.", "Keep workspace ventilated and dry."],
     timeline: {
-      total_estimated_hours: isGrocery ? 2 : 18,
-      suggested_days_min: isGrocery ? 1 : 3,
-      suggested_days_max: isGrocery ? 2 : 7
+      total_estimated_hours: isGrocery ? 2 : isKitchen ? 28 : 18,
+      suggested_days_min: isGrocery ? 1 : isKitchen ? 4 : 3,
+      suggested_days_max: isGrocery ? 2 : isKitchen ? 9 : 7
     },
     budget: {
       currency: "USD",
-      low,
-      mid,
-      high
+      low: 0,
+      mid: 0,
+      high: 0
     },
     phases: [
       {
         id: "p1",
-        name: "Scope and measure",
-        goal: "Translate project goal into measurable requirements.",
+        name: "Scope and measurements",
+        goal: "Translate goal into measurable requirements.",
         duration_hours: isGrocery ? 0.5 : 3,
         steps: [
           {
             id: "p1s1",
-            title: "Define outcomes",
-            details: "List what success looks like and non-negotiable constraints.",
-            checkpoint: "Clear scope note approved",
+            title: "Define output target",
+            details: "Write what completion looks like, constraints, and quality tier.",
+            checkpoint: "Scope brief approved",
             warning: ""
           },
           {
             id: "p1s2",
-            title: "Capture dimensions and quantities",
-            details: "Measure once, then verify. Convert to bill-of-material assumptions.",
-            checkpoint: "Measurement sheet complete",
-            warning: "Bad measurements create major cost drift."
+            title: "Capture dimensions and dependencies",
+            details: "Measure and map constraints before buying.",
+            checkpoint: "Measurement log complete",
+            warning: "Measurement errors drive rework and extra spend."
           }
         ],
-        deliverables: ["Scope brief", "Measurement log"]
+        deliverables: ["Scope brief", "Measurement sheet"]
       },
       {
         id: "p2",
-        name: "Procure and stage",
-        goal: "Build the materials and tools list and stage work safely.",
+        name: "Procurement and staging",
+        goal: "Build complete list and prep workspace.",
         duration_hours: isGrocery ? 1 : 5,
         steps: [
           {
             id: "p2s1",
-            title: "Finalize shopping list",
-            details: "Set base quantities, plus waste factor and alternatives.",
-            checkpoint: "Primary + backup list ready",
+            title: "Finalize items and alternatives",
+            details: "Set core items plus fallback options.",
+            checkpoint: "Store-ready list created",
             warning: ""
           },
           {
             id: "p2s2",
-            title: "Prepare workspace",
-            details: "Clear work area and set safety gear and storage locations.",
-            checkpoint: "Workspace pass completed",
+            title: "Stage tools and safety",
+            details: "Prepare tools and PPE before first install step.",
+            checkpoint: "Pre-work safety checklist complete",
             warning: ""
           }
         ],
-        deliverables: ["Store-ready item list", "Workspace checklist"]
+        deliverables: ["Materials list", "Tool checklist"]
       },
       {
         id: "p3",
-        name: "Execute and verify",
-        goal: "Perform the work, validate outcomes, and capture next actions.",
-        duration_hours: isGrocery ? 0.5 : 10,
+        name: "Execution and closeout",
+        goal: "Execute sequence and verify quality.",
+        duration_hours: isGrocery ? 0.5 : isKitchen ? 20 : 10,
         steps: [
           {
             id: "p3s1",
-            title: "Run step-by-step execution",
-            details: "Perform tasks in sequence and verify each checkpoint.",
-            checkpoint: "Milestones signed off",
+            title: "Run build sequence",
+            details: "Execute each task in order and validate checkpoints.",
+            checkpoint: "Core install complete",
             warning: ""
           },
           {
             id: "p3s2",
-            title: "Final QA and cleanup",
-            details: "Check fit/finish/safety and log leftover items for returns.",
-            checkpoint: "Project closeout note complete",
+            title: "QA and cleanup",
+            details: "Validate performance, finish quality, and leftover handling.",
+            checkpoint: "Closeout checklist complete",
             warning: ""
           }
         ],
-        deliverables: ["Completion checklist", "Return/reorder list"]
+        deliverables: ["QA checklist", "Return/reorder list"]
       }
     ],
-    diagram: {
-      nodes: [
-        { id: "n1", label: "Project Input", kind: "start" },
-        { id: "n2", label: "Measure + Scope", kind: "task" },
-        { id: "n3", label: "Material Plan", kind: "task" },
-        { id: "n4", label: "Safety Check", kind: "decision" },
-        { id: "n5", label: "Build + Verify", kind: "finish" }
-      ],
-      edges: [
-        { from: "n1", to: "n2", label: "" },
-        { from: "n2", to: "n3", label: "" },
-        { from: "n3", to: "n4", label: "pre-work gate" },
-        { from: "n4", to: "n5", label: "go" }
-      ]
-    },
+    diagram: baselineDiagram(),
     materials,
     tools,
-    cost_breakdown: [
-      { label: "Core materials", value: Math.round(low * 0.65) },
-      { label: "Tools and rentals", value: Math.round(low * 0.2) },
-      { label: "Contingency", value: Math.round(low * 0.15) }
-    ],
+    cost_breakdown: [],
     tips: [
-      { id: "tip1", title: "Buy once strategy", detail: "Purchase critical path items first, optional items after first milestone." },
-      { id: "tip2", title: "Label everything", detail: "Use bins and labels for faster install and easier returns." },
-      { id: "tip3", title: "Keep a rollback plan", detail: "Maintain one alternative item per critical material." }
+      { id: "tip1", title: "Critical-path first", detail: "Buy and stage critical items first; defer optional upgrades." },
+      { id: "tip2", title: "Label and zone", detail: "Split materials by phase to reduce mistakes and time loss." },
+      { id: "tip3", title: "Keep one backup option", detail: "Have one substitute per critical material before starting." }
     ],
     qa: [
-      { question: "What if my budget is tight?", answer: "Cut optional items, reduce finish tier, and keep contingency at least 10%." },
-      { question: "How accurate are quantities?", answer: "Treat quantities as first-pass; verify against final measurements before purchase." }
+      { question: "Can I cut costs fast?", answer: "Reduce finish tier, keep critical safety items, and preserve a 10% buffer." },
+      { question: "How exact are these quantities?", answer: "Treat as planning baseline; verify against field measurements before purchase." }
     ],
     agent_fill_ins: [
-      rows.length > 0 ? `Parsed ${rows.length} CSV rows to infer scope and quantities.` : "No CSV attached; assumptions are based on prompt only.",
-      "Applied a default waste factor for material planning.",
-      "Generated alternatives for high-risk or high-variance items."
+      rows.length > 0 ? `Parsed ${rows.length} CSV rows to infer quantities and scope.` : "No CSV provided; used intent-only planning assumptions.",
+      "Applied coverage checks to avoid missing core item categories.",
+      "Added alternatives for critical items where relevant."
     ],
-    confidence: rows.length > 0 ? 0.76 : 0.62
+    confidence: rows.length > 0 ? 0.8 : 0.67
   };
+
+  return ensureBlueprintCoverage(input.project_input, base);
 }
 
 export function parsePossiblyWrappedJson(text: string): unknown {

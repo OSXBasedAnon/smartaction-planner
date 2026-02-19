@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { fallbackBlueprint, intakeSchema, parsePossiblyWrappedJson, projectBlueprintSchema } from "@/lib/project-blueprint";
+import {
+  ensureBlueprintCoverage,
+  fallbackBlueprint,
+  intakeSchema,
+  parsePossiblyWrappedJson,
+  projectBlueprintSchema
+} from "@/lib/project-blueprint";
 
 const GEMINI_MODEL = "gemini-2.0-flash";
 
@@ -10,8 +16,12 @@ function buildPrompt(projectInput: string, csvInput: string, budgetTarget?: numb
     "Build a complete project blueprint that is safe, practical, and optimized for store-ready shopping lists.",
     "Assume the user is non-expert unless prompt implies pro-level.",
     "If the request appears like grocery planning, still return project structure but tune to household execution.",
-    "Quantities and costs must be realistic ranges, not exact promises.",
+    "Quantities and costs must be realistic estimates, not exact promises.",
+    "materials.est_cost must be a single estimated dollar value for each item.",
+    "For rewiring/electrical projects, always include lighting components when user asks for better lighting.",
+    "For kitchen remodel projects, include cabinetry, countertop, sink/faucet, and backsplash categories unless user explicitly excludes them.",
     "Always include alternatives for key materials.",
+    "Ensure materials are complete enough that a normal homeowner can walk into a store with the list and start work.",
     "Schema must include all required fields exactly.",
     `User project input: ${projectInput}`,
     `CSV input (if any): ${csvInput || "none"}`,
@@ -78,7 +88,8 @@ export async function POST(request: Request) {
 
     const payload = parsed.data;
     try {
-      const blueprint = await callGemini(payload.project_input, payload.csv_input ?? "", payload.budget_target);
+      const rawBlueprint = await callGemini(payload.project_input, payload.csv_input ?? "", payload.budget_target);
+      const blueprint = ensureBlueprintCoverage(payload.project_input, rawBlueprint);
       return NextResponse.json({ source: "gemini", blueprint });
     } catch {
       const blueprint = fallbackBlueprint(payload);

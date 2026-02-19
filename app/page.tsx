@@ -9,7 +9,7 @@ type PlanResponse = {
 };
 
 type EditableMaterial = ProjectBlueprint["materials"][number] & { checked: boolean };
-type EditableTool = ProjectBlueprint["tools"][number];
+type EditableTool = ProjectBlueprint["tools"][number] & { owned: boolean; checked: boolean };
 
 function money(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
@@ -40,6 +40,17 @@ function toMaterialRows(materials: ProjectBlueprint["materials"]): EditableMater
   return materials.map((item) => ({ ...item, checked: false }));
 }
 
+function toToolRows(tools: ProjectBlueprint["tools"]): EditableTool[] {
+  return tools.map((tool) => ({ ...tool, checked: false, owned: false }));
+}
+
+function labelLines(text: string): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length <= 2) return [text];
+  const mid = Math.ceil(words.length / 2);
+  return [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
+}
+
 export default function LandingPage() {
   const [projectInput, setProjectInput] = useState("rewire my basement with 8 outlets and better lighting");
   const [csvInput, setCsvInput] = useState("");
@@ -50,16 +61,17 @@ export default function LandingPage() {
   const [blueprint, setBlueprint] = useState<ProjectBlueprint | null>(null);
   const [materials, setMaterials] = useState<EditableMaterial[]>([]);
   const [tools, setTools] = useState<EditableTool[]>([]);
+  const [copied, setCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const csvRows = useMemo(() => toCsvRows(csvInput), [csvInput]);
-  const totalMaterialLow = useMemo(() => materials.reduce((acc, item) => acc + item.est_cost_low, 0), [materials]);
-  const totalMaterialHigh = useMemo(() => materials.reduce((acc, item) => acc + item.est_cost_high, 0), [materials]);
+  const totalMaterial = useMemo(() => materials.reduce((acc, item) => acc + item.est_cost, 0), [materials]);
   const totalToolCost = useMemo(
-    () => tools.reduce((acc, item) => acc + (item.rent_or_buy === "rent" ? item.est_cost * 0.4 : item.est_cost), 0),
+    () => tools.reduce((acc, item) => acc + (item.owned ? 0 : item.est_cost), 0),
     [tools]
   );
   const checkedCount = useMemo(() => materials.filter((item) => item.checked).length, [materials]);
+  const ownedCount = useMemo(() => tools.filter((tool) => tool.owned).length, [tools]);
 
   async function runPlan() {
     const trimmed = projectInput.trim();
@@ -91,7 +103,7 @@ export default function LandingPage() {
       setSource(data.source);
       setBlueprint(data.blueprint);
       setMaterials(toMaterialRows(data.blueprint.materials));
-      setTools(data.blueprint.tools);
+      setTools(toToolRows(data.blueprint.tools));
     } catch (planError) {
       setError(planError instanceof Error ? planError.message : "Failed to generate plan.");
     } finally {
@@ -112,7 +124,27 @@ export default function LandingPage() {
     setTools((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
+  async function copyMaterialList() {
+    if (materials.length === 0) return;
+    const lines = materials.map((item) => `- ${item.name} | ${item.qty} ${item.unit} | Est ${money(item.est_cost)}`);
+    const payload = ["SupplyFlare Materials List", ...lines].join("\n");
+    await navigator.clipboard.writeText(payload);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  }
+
   const chartMax = blueprint?.cost_breakdown.reduce((max, bucket) => Math.max(max, bucket.value), 1) ?? 1;
+  const diagramWidth = Math.max(980, (blueprint?.diagram.nodes.length ?? 6) * 150 + 120);
+  const nodePositions = useMemo(() => {
+    if (!blueprint) return new Map<string, { x: number; y: number }>();
+    const map = new Map<string, { x: number; y: number }>();
+    blueprint.diagram.nodes.forEach((node, index) => {
+      const x = 60 + index * 145;
+      const y = index % 3 === 0 ? 85 : index % 3 === 1 ? 145 : 48;
+      map.set(node.id, { x, y });
+    });
+    return map;
+  }, [blueprint]);
 
   return (
     <main className="planner-root">
@@ -120,13 +152,18 @@ export default function LandingPage() {
 
       <section className="top-shell">
         <header className="top-bar">
-          <div>
-            <p className="eyebrow">SupplyFlare Project Agent</p>
-            <h1>Turn Any Idea Into a DIY Blueprint</h1>
-            <p className="subtle">Describe any project, paste CSVs, and get a live workflow + editable shopping list.</p>
+          <div className="brand-lockup">
+            <img src="/logo.svg" alt="SupplyFlare logo" />
+            <span>SupplyFlare</span>
           </div>
           <div className="status-chip">{source ? `Model: ${source}` : "Ready"}</div>
         </header>
+
+        <div className="headline-wrap">
+          <p className="eyebrow">Project Blueprint Agent</p>
+          <h1>Type Any Project. Get a Smart Action Plan + Store List.</h1>
+          <p className="subtle">Left: workflow, diagrams, tips. Right: editable materials and tool checklist.</p>
+        </div>
 
         <div className="intake-grid">
           <label className="field">
@@ -185,12 +222,12 @@ export default function LandingPage() {
         <div className="left-pane">
           {!blueprint ? (
             <article className="panel-card empty-card">
-              <h2>What you get</h2>
+              <h2>What You Get</h2>
               <ul>
                 <li>Sequenced workflow with checkpoints and warnings</li>
-                <li>Visual flow map for action order</li>
-                <li>Editable materials and tool list with budget ranges</li>
-                <li>Agent fill-ins for unknown gaps</li>
+                <li>Non-linear visual flow map and decisions</li>
+                <li>Editable materials list with estimated costs</li>
+                <li>Tool checklist with ownership-aware totals</li>
               </ul>
             </article>
           ) : (
@@ -204,7 +241,7 @@ export default function LandingPage() {
                   </div>
                   <div className="badge-stack">
                     <span>{inferComplexityLabel(blueprint.complexity)}</span>
-                    <span>{money(blueprint.budget.low, blueprint.budget.currency)} - {money(blueprint.budget.high, blueprint.budget.currency)}</span>
+                    <span>{money(blueprint.budget.mid, blueprint.budget.currency)} estimated midpoint</span>
                     <span>{blueprint.timeline.total_estimated_hours}h estimate</span>
                   </div>
                 </div>
@@ -218,33 +255,55 @@ export default function LandingPage() {
               <article className="panel-card">
                 <h3>Workflow Diagram</h3>
                 <div className="diagram-scroll">
-                  <svg viewBox="0 0 920 180" className="diagram-svg" role="img" aria-label="Workflow map">
-                    {blueprint.diagram.nodes.map((node, index) => {
-                      const x = 70 + index * 170;
-                      const y = 90;
-                      return (
-                        <g key={node.id}>
-                          <rect x={x} y={y - 30} width={140} height={60} rx={18} fill={nodeColor(node.kind)} />
-                          <text x={x + 70} y={y + 4} textAnchor="middle" className="diagram-label">
-                            {node.label.slice(0, 18)}
-                          </text>
-                        </g>
-                      );
-                    })}
+                  <svg viewBox={`0 0 ${diagramWidth} 220`} className="diagram-svg" role="img" aria-label="Workflow map" style={{ width: diagramWidth }}>
+                    <defs>
+                      <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+                        <path d="M 0 0 L 8 4 L 0 8 z" fill="#2f6150" />
+                      </marker>
+                    </defs>
                     {blueprint.diagram.edges.map((edge) => {
-                      const fromIndex = blueprint.diagram.nodes.findIndex((node) => node.id === edge.from);
-                      const toIndex = blueprint.diagram.nodes.findIndex((node) => node.id === edge.to);
-                      if (fromIndex < 0 || toIndex < 0) return null;
-                      const x1 = 70 + fromIndex * 170 + 140;
-                      const x2 = 70 + toIndex * 170;
+                      const from = nodePositions.get(edge.from);
+                      const to = nodePositions.get(edge.to);
+                      if (!from || !to) return null;
+                      const x1 = from.x + 122;
+                      const y1 = from.y + 28;
+                      const x2 = to.x;
+                      const y2 = to.y + 28;
+                      const c1x = x1 + 40;
+                      const c1y = y1 + (y2 > y1 ? 18 : -18);
+                      const c2x = x2 - 36;
+                      const c2y = y2 + (y1 > y2 ? 18 : -18);
                       return (
                         <g key={`${edge.from}-${edge.to}-${edge.label}`}>
-                          <line x1={x1} y1={90} x2={x2} y2={90} stroke="var(--line)" strokeWidth="3" />
+                          <path
+                            d={`M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`}
+                            stroke="var(--line-strong)"
+                            strokeWidth="2.5"
+                            fill="none"
+                            markerEnd="url(#arrow)"
+                          />
                           {edge.label ? (
-                            <text x={(x1 + x2) / 2} y={74} textAnchor="middle" className="diagram-edge">
+                            <text x={(x1 + x2) / 2} y={Math.min(y1, y2) - 8} textAnchor="middle" className="diagram-edge">
                               {edge.label}
                             </text>
                           ) : null}
+                        </g>
+                      );
+                    })}
+                    {blueprint.diagram.nodes.map((node) => {
+                      const pos = nodePositions.get(node.id);
+                      if (!pos) return null;
+                      const lines = labelLines(node.label);
+                      return (
+                        <g key={node.id}>
+                          <rect x={pos.x} y={pos.y} width={122} height={56} rx={16} fill={nodeColor(node.kind)} stroke="#7bb49c" />
+                          <text x={pos.x + 61} y={pos.y + 24} textAnchor="middle" className="diagram-label">
+                            {lines.map((line, idx) => (
+                              <tspan key={line} x={pos.x + 61} dy={idx === 0 ? 0 : 14}>
+                                {line}
+                              </tspan>
+                            ))}
+                          </text>
                         </g>
                       );
                     })}
@@ -290,7 +349,6 @@ export default function LandingPage() {
                     ))}
                   </div>
                 </div>
-
                 <div>
                   <h3>Field Tips</h3>
                   <div className="tip-list">
@@ -332,6 +390,11 @@ export default function LandingPage() {
               <h3>Materials List</h3>
               <span>{checkedCount}/{materials.length} checked</span>
             </div>
+            <div className="actions-row">
+              <button type="button" className="ghost-btn small-btn" onClick={() => void copyMaterialList()}>
+                {copied ? "Copied" : "Copy List"}
+              </button>
+            </div>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -339,8 +402,7 @@ export default function LandingPage() {
                     <th>Done</th>
                     <th>Item</th>
                     <th>Qty</th>
-                    <th>Low</th>
-                    <th>High</th>
+                    <th>Est</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -349,7 +411,7 @@ export default function LandingPage() {
                       <td>
                         <input type="checkbox" checked={item.checked} onChange={(event) => updateMaterial(item.id, { checked: event.target.checked })} />
                       </td>
-                      <td>
+                      <td className="item-cell">
                         <input value={item.name} onChange={(event) => updateMaterial(item.id, { name: event.target.value })} />
                         <small>{item.spec}</small>
                       </td>
@@ -361,18 +423,14 @@ export default function LandingPage() {
                         />
                       </td>
                       <td>
-                        <input
-                          value={item.est_cost_low}
-                          inputMode="decimal"
-                          onChange={(event) => updateMaterial(item.id, { est_cost_low: Number(event.target.value || "0") })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          value={item.est_cost_high}
-                          inputMode="decimal"
-                          onChange={(event) => updateMaterial(item.id, { est_cost_high: Number(event.target.value || "0") })}
-                        />
+                        <div className="money-input">
+                          <span>$</span>
+                          <input
+                            value={item.est_cost}
+                            inputMode="decimal"
+                            onChange={(event) => updateMaterial(item.id, { est_cost: Number(event.target.value || "0") })}
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -382,33 +440,33 @@ export default function LandingPage() {
           </article>
 
           <article className="rail-card">
-            <h3>Tools</h3>
+            <div className="row-split">
+              <h3>Tools Checklist</h3>
+              <span>{ownedCount}/{tools.length} owned</span>
+            </div>
             <div className="tool-list">
               {tools.map((tool) => (
-                <div className="tool-row" key={tool.id}>
-                  <input type="text" value={tool.name} onChange={(event) => updateTool(tool.id, { name: event.target.value })} />
-                  <select value={tool.rent_or_buy} onChange={(event) => updateTool(tool.id, { rent_or_buy: event.target.value as EditableTool["rent_or_buy"] })}>
-                    <option value="own">Own</option>
-                    <option value="rent">Rent</option>
-                    <option value="buy">Buy</option>
-                  </select>
-                  <input
-                    value={tool.est_cost}
-                    inputMode="decimal"
-                    onChange={(event) => updateTool(tool.id, { est_cost: Number(event.target.value || "0") })}
-                  />
-                </div>
+                <label className="tool-check" key={tool.id}>
+                  <input type="checkbox" checked={tool.checked} onChange={(event) => updateTool(tool.id, { checked: event.target.checked })} />
+                  <div>
+                    <input type="text" value={tool.name} onChange={(event) => updateTool(tool.id, { name: event.target.value })} />
+                    <small>{tool.purpose}</small>
+                  </div>
+                  <label className="own-toggle">
+                    <input type="checkbox" checked={tool.owned} onChange={(event) => updateTool(tool.id, { owned: event.target.checked })} />
+                    <span>Own</span>
+                  </label>
+                  <div className="tool-money">{money(tool.est_cost)}</div>
+                </label>
               ))}
             </div>
           </article>
 
           <article className="rail-card total-card">
             <h3>Live Totals</h3>
-            <p>Materials: {money(totalMaterialLow)} - {money(totalMaterialHigh)}</p>
-            <p>Tools: {money(totalToolCost)}</p>
-            <p className="grand">
-              Total: {money(totalMaterialLow + totalToolCost)} - {money(totalMaterialHigh + totalToolCost)}
-            </p>
+            <p>Materials: {money(totalMaterial)}</p>
+            <p>Tools (excluding owned): {money(totalToolCost)}</p>
+            <p className="grand">Total Est: {money(totalMaterial + totalToolCost)}</p>
             {blueprint ? <p className="confidence">Plan confidence: {(blueprint.confidence * 100).toFixed(0)}%</p> : null}
           </article>
 

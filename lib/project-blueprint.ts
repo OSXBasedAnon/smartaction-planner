@@ -117,6 +117,28 @@ function includesAny(text: string, words: string[]): boolean {
   return words.some((word) => text.includes(word));
 }
 
+function intentFlags(text: string) {
+  const electricalStrong = includesAny(text, ["rewire", "re-wire", "circuit", "breaker", "panel", "outlet", "switch leg", "junction"]);
+  const kitchenLocation = includesAny(text, ["kitchen"]);
+  const kitchenRemodel = kitchenLocation && includesAny(text, ["remodel", "renovate", "cabinet", "counter", "backsplash", "sink"]);
+  const tileIntent = includesAny(text, ["tile", "tiling", "grout", "backsplash"]);
+  const groceryIntent = includesAny(text, ["grocery", "meal", "pantry", "food list", "shopping list"]);
+  const paintIntent = includesAny(text, ["paint", "primer", "roll", "brush"]);
+  const plumbingIntent = includesAny(text, ["plumbing", "faucet", "sink", "pipe", "drain"]);
+  const framingIntent = includesAny(text, ["frame", "framing", "stud", "wall", "room"]);
+
+  return {
+    isElectrical: electricalStrong || (includesAny(text, ["electrical", "lighting"]) && !kitchenRemodel),
+    isKitchen: kitchenRemodel && !electricalStrong,
+    isTile: tileIntent,
+    isGrocery: groceryIntent,
+    isPaint: paintIntent,
+    isPlumbing: plumbingIntent,
+    isFraming: framingIntent,
+    kitchenLocation
+  };
+}
+
 function slug(text: string): string {
   return text
     .toLowerCase()
@@ -292,11 +314,11 @@ export function ensureBlueprintCoverage(projectInput: string, blueprint: Project
   let materials = [...blueprint.materials];
   let tools = [...blueprint.tools];
   const fillIns = [...blueprint.agent_fill_ins];
-
-  const isElectrical = includesAny(lower, ["rewire", "electrical", "outlet", "circuit", "panel", "lighting", "basement"]);
-  const isKitchen = includesAny(lower, ["kitchen", "cabinet", "counter", "backsplash", "sink", "remodel"]);
-  const isTile = includesAny(lower, ["tile", "tiling", "grout", "backsplash"]);
-  const isGrocery = includesAny(lower, ["grocery", "meal", "pantry", "food list", "shopping list"]);
+  const flags = intentFlags(lower);
+  const isElectrical = flags.isElectrical;
+  const isKitchen = flags.isKitchen;
+  const isTile = flags.isTile;
+  const isGrocery = flags.isGrocery;
 
   if (isElectrical) {
     materials = addMaterialIfMissing(
@@ -523,20 +545,23 @@ export function fallbackBlueprint(input: IntakePayload): ProjectBlueprint {
   const rows = csvRows(input.csv_input ?? "");
   const normalized = input.project_input.trim();
   const lower = normalized.toLowerCase();
-  const isKitchen = includesAny(lower, ["kitchen", "cabinet", "counter", "sink", "backsplash"]);
-  const isElectrical = includesAny(lower, ["rewire", "breaker", "panel", "outlet", "circuit", "electrical", "lighting"]);
-  const isTile = includesAny(lower, ["tile", "tiling", "grout", "backsplash"]);
-  const isPaint = includesAny(lower, ["paint", "primer", "roll", "brush"]);
-  const isPlumbing = includesAny(lower, ["plumbing", "faucet", "sink", "pipe", "drain"]);
-  const isFraming = includesAny(lower, ["frame", "framing", "stud", "wall", "room"]);
-  const isGrocery = includesAny(lower, ["grocery", "meal", "food", "shopping list", "pantry"]);
+  const flags = intentFlags(lower);
+  const isKitchen = flags.isKitchen;
+  const isElectrical = flags.isElectrical;
+  const isTile = flags.isTile;
+  const isPaint = flags.isPaint;
+  const isPlumbing = flags.isPlumbing;
+  const isFraming = flags.isFraming;
+  const isGrocery = flags.isGrocery;
   const contextTitle = isKitchen
     ? "Kitchen Remodel Blueprint"
-    : isElectrical
-      ? "Basement Rewire and Lighting Blueprint"
-      : isGrocery
-        ? "Smart Grocery Planning Blueprint"
-        : "DIY Project Blueprint";
+    : isElectrical && flags.kitchenLocation
+      ? "Kitchen Rewire Blueprint"
+      : isElectrical
+        ? "Electrical Rewire Blueprint"
+        : isGrocery
+          ? "Smart Grocery Planning Blueprint"
+          : "DIY Project Blueprint";
 
   const materials: ProjectBlueprint["materials"] = isGrocery
     ? [

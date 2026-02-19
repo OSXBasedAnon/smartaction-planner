@@ -8,6 +8,7 @@ import {
 } from "@/lib/project-blueprint";
 
 const GEMINI_MODEL = "gemini-2.0-flash";
+const ALLOW_PLANNER_FALLBACK = (process.env.ALLOW_PLANNER_FALLBACK ?? "false").toLowerCase() === "true";
 
 function buildPrompt(projectInput: string, csvInput: string, budgetTarget?: number) {
   return [
@@ -91,9 +92,18 @@ export async function POST(request: Request) {
       const rawBlueprint = await callGemini(payload.project_input, payload.csv_input ?? "", payload.budget_target);
       const blueprint = ensureBlueprintCoverage(payload.project_input, rawBlueprint);
       return NextResponse.json({ source: "gemini", blueprint });
-    } catch {
+    } catch (error) {
+      if (!ALLOW_PLANNER_FALLBACK) {
+        return NextResponse.json(
+          {
+            error: "planner_generation_failed",
+            message: error instanceof Error ? error.message : "gemini_generation_failed"
+          },
+          { status: 502 }
+        );
+      }
       const blueprint = fallbackBlueprint(payload);
-      return NextResponse.json({ source: "fallback", blueprint });
+      return NextResponse.json({ source: "fallback", blueprint, warning: "fallback_enabled" });
     }
   } catch (error) {
     return NextResponse.json(

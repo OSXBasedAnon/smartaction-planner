@@ -6,6 +6,7 @@ import type { ProjectBlueprint } from "@/lib/project-blueprint";
 type PlanResponse = {
   source: "gemini" | "fallback";
   blueprint: ProjectBlueprint;
+  warning?: string;
 };
 
 type EditableMaterial = ProjectBlueprint["materials"][number] & { checked: boolean; unit_cost: number };
@@ -167,12 +168,12 @@ export default function LandingPage() {
     const phaseTwo = blueprint?.phases[1]?.name ?? "Procure";
     const phaseThree = blueprint?.phases[2]?.name ?? "Execute";
     return [
-      { id: "d1", label: "Project Input", kind: "start" as const, x: 20, y: 82 },
-      { id: "d2", label: phaseOne, kind: "task" as const, x: 150, y: 24 },
-      { id: "d3", label: "Code + Safety", kind: "decision" as const, x: 300, y: 24 },
-      { id: "d4", label: phaseTwo, kind: "task" as const, x: 300, y: 140 },
-      { id: "d5", label: phaseThree, kind: "task" as const, x: 450, y: 140 },
-      { id: "d6", label: "Final QA", kind: "finish" as const, x: 580, y: 82 }
+      { id: "d1", label: "Project Input", kind: "start" as const, x: 24, y: 84 },
+      { id: "d2", label: phaseOne, kind: "task" as const, x: 172, y: 84 },
+      { id: "d3", label: "Code + Safety", kind: "decision" as const, x: 320, y: 84 },
+      { id: "d4", label: phaseTwo, kind: "task" as const, x: 320, y: 154 },
+      { id: "d5", label: phaseThree, kind: "task" as const, x: 468, y: 154 },
+      { id: "d6", label: "Final QA", kind: "finish" as const, x: 616, y: 154 }
     ];
   }, [blueprint]);
   const diagramNodeMap = useMemo(
@@ -194,15 +195,14 @@ export default function LandingPage() {
       <section className="top-shell">
         <header className="top-bar">
           <div className="brand-lockup">
-            <span>SupplyFlare</span>
             <img src="/logo.svg" alt="SupplyFlare logo" />
+            <span>SupplyFlare</span>
           </div>
         </header>
 
         <div className="headline-wrap">
           <p className="eyebrow">Project Blueprint Agent</p>
           <h1>Type Any Project. Get a Smart Action Plan + Supply List.</h1>
-          <p className="subtle">Project Blueprint Agent</p>
         </div>
 
         <div className="intake-grid">
@@ -295,7 +295,7 @@ export default function LandingPage() {
               <article className="panel-card">
                 <h3>Workflow Diagram</h3>
                 <div className="diagram-scroll">
-                  <svg viewBox="0 0 716 220" className="diagram-svg" role="img" aria-label="Workflow map">
+                  <svg viewBox="0 0 760 236" className="diagram-svg" role="img" aria-label="Workflow map">
                     <defs>
                       <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
                         <path d="M 0 0 L 8 4 L 0 8 z" fill="#2f6150" />
@@ -309,21 +309,22 @@ export default function LandingPage() {
                       const y1 = from.y + 28;
                       const x2 = to.x;
                       const y2 = to.y + 28;
-                      const c1x = x1 + (x2 - x1) * 0.33;
-                      const c1y = y1;
-                      const c2x = x1 + (x2 - x1) * 0.66;
-                      const c2y = y2;
+                      const midX = x1 + (x2 - x1) / 2;
+                      const path =
+                        Math.abs(y1 - y2) < 2
+                          ? `M ${x1} ${y1} L ${x2} ${y2}`
+                          : `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
                       return (
                         <g key={`${edge.from}-${edge.to}-${edge.label}`}>
                           <path
-                            d={`M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`}
+                            d={path}
                             stroke="var(--line-strong)"
                             strokeWidth="2.5"
                             fill="none"
                             markerEnd="url(#arrow)"
                           />
                           {edge.label ? (
-                            <text x={(x1 + x2) / 2} y={Math.min(y1, y2) - 8} textAnchor="middle" className="diagram-edge">
+                            <text x={(x1 + x2) / 2} y={Math.min(y1, y2) - 10} textAnchor="middle" className="diagram-edge">
                               {edge.label}
                             </text>
                           ) : null}
@@ -426,7 +427,10 @@ export default function LandingPage() {
           <article className="rail-card">
             <div className="row-split">
               <h3>Supply List</h3>
-              <span>{checkedCount}/{materials.length} checked</span>
+              <div className="supply-meta">
+                <span>{checkedCount}/{materials.length} checked</span>
+                <small>Remaining materials cost: {money(remainingMaterialCost)}</small>
+              </div>
             </div>
             <div className="actions-row">
               <button type="button" className="ghost-btn small-btn" onClick={() => void copyMaterialList()}>
@@ -502,7 +506,6 @@ export default function LandingPage() {
           <article className="rail-card total-card">
             <h3>Live Totals</h3>
             <p>Materials: {money(totalMaterial)}</p>
-            <p>Remaining materials cost: {money(remainingMaterialCost)}</p>
             <p>Tools (excluding owned): {money(totalToolCost)}</p>
             <p className="grand">Total Est: {money(totalMaterial + totalToolCost)}</p>
             {blueprint ? <p className="confidence">Plan confidence: {(blueprint.confidence * 100).toFixed(0)}%</p> : null}

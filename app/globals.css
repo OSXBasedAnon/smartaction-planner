@@ -441,6 +441,17 @@ button:disabled {
   justify-content: flex-start;
 }
 
+.supply-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.supply-meta small {
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+}
+
 .table-wrap {
   overflow-x: auto;
 }
